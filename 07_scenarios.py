@@ -1,5 +1,5 @@
 """Q8: сценарии P1b (платформа), P3 (внутренняя функция) и сверка -36 / -16,4 в движке finance.
-Запуск:  cd /home/claude/product_farm && PYTHONPATH=src python3 projects/20261013-llm-budget-manager/07_scenarios.py
+Запуск:  cd /home/claude/product_farm && PYTHONPATH=src python3 projects/pf-20261013-llm-budget-manager/07_scenarios.py
 drivers.json НЕ изменяется: все сценарии - копии в памяти. Результат подставляется в 07_finance_scenarios.md
 вместо маркера <!--ENGINE_RESULTS-->."""
 import copy
