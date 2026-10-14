@@ -1,6 +1,14 @@
 // dataProvider react-admin поверх 12_openapi.yaml: списки {items,total}, page (с 1), page_size (≤ 200),
 // sort, order (asc|desc). Ходит только в операции из карты RESOURCES, которая сверена с контрактом.
-import { HttpError, type DataProvider, type GetListParams, type Identifier, type RaRecord } from 'ra-core';
+import {
+  HttpError,
+  type DataProvider,
+  type GetListParams,
+  type GetListResult,
+  type GetManyResult,
+  type Identifier,
+  type RaRecord,
+} from 'ra-core';
 import { MAX_PAGE_SIZE, RESOURCES, type ResourceConfig } from './api/resources';
 import type { HttpClient, QueryValue } from './api/http';
 import { ru } from './i18n/ru';
@@ -71,29 +79,35 @@ function pageLocally(rows: RaRecord[], params: GetListParams): RaRecord[] {
 }
 
 export function createDataProvider(http: HttpClient): DataProvider {
-  async function fetchList(resource: string, params: GetListParams) {
+  // Методы DataProvider обобщены по RecordType, который задаёт вызывающий экран. Транспорт видит только JSON,
+  // поэтому тип записи — утверждение вызывающего; приведение сделано в одном месте, здесь.
+  async function fetchList<R extends RaRecord>(resource: string, params: GetListParams): Promise<GetListResult<R>> {
     const cfg = config(resource);
     const query = listQuery(cfg, resource, params);
     const { body } = await http.request<ListBody>('GET', `/${cfg.path}`, { query });
     const items = (body?.items ?? []).map((row) => withId(cfg, row));
-    if (cfg.list.paginated) return { data: items, total: body?.total ?? items.length };
-    return { data: pageLocally(items, params), total: items.length };
+    const data = cfg.list.paginated ? items : pageLocally(items, params);
+    return { data: data as R[], total: cfg.list.paginated ? (body?.total ?? items.length) : items.length };
   }
 
-  async function fetchOne(resource: string, id: Identifier): Promise<RaRecord> {
+  async function fetchOne<R extends RaRecord>(resource: string, id: Identifier): Promise<R> {
     const cfg = config(resource);
     if (cfg.getOne) {
       const { body } = await http.request<Row>('GET', itemPath(cfg, id));
-      return withId(cfg, body ?? {});
+      return withId(cfg, body ?? {}) as R;
     }
     // Отдельной операции нет, но список отдаётся целиком — запись берётся из него.
     if (!cfg.list.paginated) {
       const { body } = await http.request<ListBody>('GET', `/${cfg.path}`);
       const row = body?.items.find((it) => String(it[cfg.key]) === String(id));
-      if (row) return withId(cfg, row);
+      if (row) return withId(cfg, row) as R;
       throw new HttpError(ru.bm.problem.not_found, 404, { code: 'not_found' });
     }
     throw new Error(fmt(ru.bm.error.unsupported_operation, { operation: 'getOne', resource }));
+  }
+
+  async function fetchMany<R extends RaRecord>(resource: string, ids: Identifier[]): Promise<GetManyResult<R>> {
+    return { data: await Promise.all(ids.map((id) => fetchOne<R>(resource, id))) };
   }
 
   return {
@@ -101,7 +115,7 @@ export function createDataProvider(http: HttpClient): DataProvider {
 
     getOne: async (resource, { id }) => ({ data: await fetchOne(resource, id) }),
 
-    getMany: async (resource, { ids }) => ({ data: await Promise.all(ids.map((id) => fetchOne(resource, id))) }),
+    getMany: (resource, { ids }) => fetchMany(resource, ids),
 
     getManyReference: (resource, { target, id, ...rest }) =>
       fetchList(resource, { ...rest, filter: { ...rest.filter, [target]: id } }),

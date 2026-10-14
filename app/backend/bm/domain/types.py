@@ -89,7 +89,10 @@ class ModelInfo:
 
 @dataclass(frozen=True, slots=True)
 class LimitState:
-    """Состояние одного лимита владельца за период. `owner_ref` — псевдоним сотрудника или id подразделения."""
+    """Состояние одного лимита владельца за период.
+
+    `owner_ref` — псевдоним сотрудника или id подразделения.
+    """
 
     owner_type: OwnerType
     owner_ref: str

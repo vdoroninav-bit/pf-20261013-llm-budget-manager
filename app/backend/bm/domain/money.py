@@ -41,7 +41,7 @@ def kop_to_str(k: Kop) -> str:
 
 
 def str_to_kop(s: str) -> Kop:
-    """"30.00" → 3000. Принимает только формат `Money` (`^-?[0-9]+\\.[0-9]{2}$`), иначе ValueError."""
+    """ "30.00" → 3000. Принимает только формат `Money` (`^-?[0-9]+\\.[0-9]{2}$`), иначе ValueError."""
     m = _MONEY_RE.match(s)
     if m is None:
         raise ValueError(f"не денежная сумма: {s!r}")

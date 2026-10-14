@@ -120,7 +120,14 @@ class Seed:
             tie_order,
             active,
         )
-        await self.price(model_id, in_per_1k, out_per_1k, cached_per_1k=cached_per_1k, currency=currency, valid_from=price_from)
+        await self.price(
+            model_id,
+            in_per_1k,
+            out_per_1k,
+            cached_per_1k=cached_per_1k,
+            currency=currency,
+            valid_from=price_from,
+        )
         return model_id
 
     async def price(
@@ -146,7 +153,13 @@ class Seed:
         return price_id
 
     async def limits(
-        self, owner_type: str, owner_id: UUID, *, day: int | None = None, week: int | None = None, month: int | None = None
+        self,
+        owner_type: str,
+        owner_id: UUID,
+        *,
+        day: int | None = None,
+        week: int | None = None,
+        month: int | None = None,
     ) -> None:
         for period, amount in (("day", day), ("week", week), ("month", month)):
             if amount is None:

@@ -173,4 +173,6 @@ def select(
     if best is None:
         return _verdict(Outcome.DENY, code=DenyCode.BUDGET_EXCEEDED, applied=applied)
     m_cost, _, m_id, m_est = best
-    return _verdict(Outcome.REDIRECT, model=m_id, reserve=m_cost, redirected=True, applied=applied, estimate=m_est)
+    return _verdict(
+        Outcome.REDIRECT, model=m_id, reserve=m_cost, redirected=True, applied=applied, estimate=m_est
+    )

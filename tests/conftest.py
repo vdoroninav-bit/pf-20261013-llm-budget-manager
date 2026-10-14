@@ -57,6 +57,47 @@ def seed(db: asyncpg.Connection) -> Seed:
     return Seed(db)
 
 
+# ------------------------------------------------------------------ T015: приложение и HTTP-клиент
+
+TEST_SESSION_SECRET = "test-session-secret-0123456789abcdef"
+BOOTSTRAP_ADMIN = ("bootstrap-admin", "bootstrap-password-123")
+
+
+@pytest.fixture
+def settings() -> Any:
+    """Настройки приложения для тестов: без файла .env, импорт выключен, первый админ — `bootstrap-admin`."""
+    from bm.settings import Settings
+
+    return Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        database_url=DATABASE_URL or "postgresql://nobody@127.0.0.1:1/none_test",
+        session_secret=TEST_SESSION_SECRET,
+        admin_initial_login=BOOTSTRAP_ADMIN[0],
+        admin_initial_password=BOOTSTRAP_ADMIN[1],
+        import_enabled=False,
+    )
+
+
+@pytest.fixture
+async def app(db: asyncpg.Connection, settings: Any, clock: FrozenClock) -> AsyncIterator[Any]:
+    """Приложение FastAPI с выполненным lifespan (пул к той же тестовой БД, что и `db`)."""
+    from bm.main import create_app
+
+    application = create_app(settings, clock=clock)
+    async with application.router.lifespan_context(application):
+        yield application
+
+
+@pytest.fixture
+async def client(app: Any) -> AsyncIterator[Any]:
+    """httpx-клиент поверх ASGI: без сети, базовый URL как в `servers` контракта."""
+    import httpx
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost:8080") as c:
+        yield c
+
+
 # ------------------------------------------------------------------ T017: ноль исходящих соединений
 
 

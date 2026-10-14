@@ -7,6 +7,7 @@ openapi-core используется напрямую, без интеграц�
 требует fastapi < 0.140, а у нас 0.143.0 — 14_devops.md, отклонение 3).
 """
 
+import json
 import re
 from dataclasses import dataclass, field
 from functools import cache
@@ -15,7 +16,7 @@ from typing import Any
 
 import httpx
 import yaml
-from openapi_core import OpenAPI
+from openapi_core import Config, OpenAPI
 from openapi_core.datatypes import RequestParameters
 from werkzeug.datastructures import Headers
 
@@ -30,7 +31,9 @@ def contract() -> dict[str, Any]:
 
 @cache
 def _openapi() -> OpenAPI:
-    return OpenAPI.from_dict(contract())
+    # application/problem+json — тоже JSON (RFC 9457); openapi-core по умолчанию его не разбирает.
+    config = Config(extra_media_type_deserializers={"application/problem+json": json.loads})
+    return OpenAPI.from_dict(contract(), config=config)
 
 
 @cache
@@ -79,7 +82,9 @@ def assert_matches_contract(response: httpx.Response, operation_id: str) -> None
     method, template = operations()[operation_id]
     req = response.request
     assert req.method.lower() == method, f"{operation_id}: метод {req.method} ≠ {method.upper()}"
-    assert _path_regex(template).match(req.url.path), f"{operation_id}: путь {req.url.path} не подходит под {template}"
+    assert _path_regex(template).match(req.url.path), (
+        f"{operation_id}: путь {req.url.path} не подходит под {template}"
+    )
     declared = operation(operation_id)["responses"]
     assert str(response.status_code) in declared, (
         f"{operation_id}: статус {response.status_code} не объявлен в контракте ({sorted(declared)}); "

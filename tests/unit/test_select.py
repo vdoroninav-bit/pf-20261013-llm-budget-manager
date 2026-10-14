@@ -61,7 +61,11 @@ def model(
         tie_order=tie,
         active=active,
         price=Price(
-            id=uuid4(), in_per_1k=Decimal(p_in), out_per_1k=Decimal(p_out), cached_per_1k=None, currency=currency
+            id=uuid4(),
+            in_per_1k=Decimal(p_in),
+            out_per_1k=Decimal(p_out),
+            cached_per_1k=None,
+            currency=currency,
         ),
     )
 
@@ -98,7 +102,9 @@ def limit(
     )
 
 
-def req(kind: str = "chat", *, tools: bool = False, json: bool = False, ctx: int = 0, inp=1000, out=400) -> DecisionInput:
+def req(
+    kind: str = "chat", *, tools: bool = False, json: bool = False, ctx: int = 0, inp=1000, out=400
+) -> DecisionInput:
     return DecisionInput(
         kind=kind, input_tokens=inp, max_output_tokens=out, tools=tools, json_mode=json, context_tokens=ctx
     )
@@ -201,7 +207,11 @@ def test_1_6_strictest_limit_personal_day_exhausted() -> None:
     assert v.outcome is Outcome.DENY
     assert v.code is DenyCode.BUDGET_EXCEEDED
     assert v.applied is not None
-    assert (v.applied.owner_type, v.applied.period.kind, v.applied.remaining) == ("employee", PeriodKind.DAY, 0)
+    assert (v.applied.owner_type, v.applied.period.kind, v.applied.remaining) == (
+        "employee",
+        PeriodKind.DAY,
+        0,
+    )
 
 
 def test_1_6_strictest_limit_redirects_to_zero_price() -> None:
@@ -361,7 +371,10 @@ def test_all_limits_must_fit_for_redirect() -> None:
     ]
     v = run("A", allowed={"A", "C"}, limits=limits)
     assert (v.outcome, v.code) == (Outcome.DENY, DenyCode.BUDGET_EXCEEDED)
-    assert v.applied is not None and (v.applied.owner_type, v.applied.period.kind) == ("department", PeriodKind.WEEK)
+    assert v.applied is not None and (v.applied.owner_type, v.applied.period.kind) == (
+        "department",
+        PeriodKind.WEEK,
+    )
 
 
 def test_applied_limit_tie_employee_before_department_then_day_week_month() -> None:

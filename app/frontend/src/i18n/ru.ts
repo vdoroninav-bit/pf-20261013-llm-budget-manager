@@ -222,6 +222,9 @@ const bmRu = {
     subtitle: 'Учёт и лимиты расходов на языковые модели',
     signed_in_as: 'Вы вошли как %{login} (%{role}).',
   },
+  password: {
+    title: 'Смена пароля',
+  },
   role: {
     admin: 'Администратор',
     budget_owner: 'Владелец бюджета',

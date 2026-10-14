@@ -100,12 +100,12 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Файлы: `bm/db/migrate.py`, `bm/db/migrations/0001_init.sql` (все таблицы из `12_plan.md` §7, партиции `call_record` на текущий и следующий месяц, `REVOKE UPDATE, DELETE ON audit_log`), `tests/conftest.py` (фикстуры `db` — чистая схема на тест, `clock` — `FrozenClock`, `seed`), `tests/fixtures/seed.py` (построитель: подразделение, сотрудник, модель с ценой, лимиты, ключ — прямыми INSERT), `tests/integration/test_migrations.py`.
   - Готово: `make test` проходит; `test_migrations` проверяет наличие таблиц и запрет UPDATE на `audit_log`.
   - Зависимости: T001.
-- [ ] **T015 [—] [backend] Каркас приложения и контрактный тест.**
+- [x] **T015 [—] [backend] Каркас приложения и контрактный тест.**
   - Файлы: `bm/settings.py`, `bm/main.py` (`create_app`), `bm/http/errors.py` (`application/problem+json`, `detail` на русском), `bm/http/routers/system.py` (`/healthz`, `/readyz`, `/metrics`), `tests/contract/test_openapi_contract.py`.
   - Контрактный тест: (а) `12_openapi.yaml` валиден (openapi-spec-validator); (б) хелпер `assert_matches_contract(response, operation_id)` на openapi-core, им пользуются все приёмочные тесты; (в) каждая `operationId` из контракта зарегистрирована в приложении (тест помечается `xfail(strict=True)`, пока не реализованы все роутеры).
   - Готово: `make test` проходит.
   - Зависимости: T014.
-- [ ] **T016 [—] [backend] Вход, роли, аудит.**
+- [x] **T016 [—] [backend] Вход, роли, аудит.**
   - Файлы: `bm/access/{auth.py, permissions.py, authorize.py, audit.py}`, `bm/http/routers/auth.py`, `tests/unit/test_permissions.py`, `tests/acceptance/test_auth.py`.
   - Правила:
     - argon2id; cookie `bm_session` с `HttpOnly; SameSite=Strict`; CSRF на изменяющих запросах;
@@ -115,7 +115,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - отказ доступа пишется в аудит (`forbidden_access`).
   - Готово: `make test`.
   - Зависимости: T015.
-- [ ] **T017 [P] [—] [backend] Egress и тест «0 исходящих».**
+- [x] **T017 [P] [—] [backend] Egress и тест «0 исходящих».**
   - Файлы: `bm/egress/client.py`, `app/backend/importlinter.ini` (контракт: `httpx`, `urllib`, `http.client`, `socket` запрещены вне `bm.egress`), `tests/conftest.py` (autouse-фикстура подменяет `socket.socket.connect` и разрешает только хост и порт PostgreSQL), `tests/security/test_no_egress.py`.
   - Правила `egress`:
     - `get_client("anthropic")` при `IMPORT_ENABLED=false` выбрасывает `EgressDisabled`;
@@ -123,11 +123,11 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - webhook разрешён только на частные адреса: 10/8, 172.16/12, 192.168/16, 127/8.
   - Готово: `make test`; `lint-imports` проходит.
   - Зависимости: T015.
-- [ ] **T018 [P] [—] [backend] Снимок конфигурации.**
+- [x] **T018 [P] [—] [backend] Снимок конфигурации.**
   - Файлы: `bm/budget/snapshot.py` (`ConfigSnapshot`: подразделения, назначения на сегодня, лимиты, разрешённые модели, каталог с текущими ценами, курсы, ключи по SHA-256, подписки; `load(conn)`; `ensure_fresh(conn)` одним запросом к `config_version`), `bm/config/service.py` (`apply(conn, change, actor)`: запись + аудит + `config_version += 1` в одной транзакции), `tests/integration/test_snapshot.py`.
   - Готово: `make test`.
   - Зависимости: T014.
-- [ ] **T019 [P] [—] [backend] Ядро уведомлений.**
+- [x] **T019 [P] [—] [backend] Ядро уведомлений.**
   - Файлы: `bm/notify/service.py` (`create_once(conn, kind, department_id, period, period_start, message) -> bool`, UNIQUE по ключу), `bm/notify/channels.py` (`InApp`), `bm/http/routers/notifications.py` (`listNotifications`, `markNotificationRead`), `tests/integration/test_notify_once.py`.
   - Готово: `make test`.
   - Зависимости: T016.

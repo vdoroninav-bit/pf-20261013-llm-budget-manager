@@ -1,8 +1,9 @@
 // Корень админки: react-admin (MIT-ядро), русский словарь, тема из design/tokens.json.
 // Маршруты — hash (/admin/#/...), поэтому бэкенду достаточно отдавать index.html и ассеты из /admin/.
 import { useMemo } from 'react';
-import { Admin } from 'react-admin';
-import { createAuthProvider } from './authProvider';
+import { Admin, CustomRoutes } from 'react-admin';
+import { Route } from 'react-router-dom';
+import { createAuthProvider, PASSWORD_ROUTE } from './authProvider';
 import { createDataProvider } from './dataProvider';
 import { createHttpClient, type FetchLike } from './api/http';
 import { createSessionStore } from './api/session';
@@ -11,6 +12,7 @@ import { ru } from './i18n/ru';
 import { BmLayout } from './layout/BmLayout';
 import { Dashboard } from './pages/Dashboard';
 import { LoginPage } from './pages/LoginPage';
+import { PasswordPage } from './pages/PasswordPage';
 import { darkTheme, lightTheme } from './theme/muiTheme';
 import { createThemeStore } from './theme/themeStore';
 
@@ -52,6 +54,12 @@ export function App({ fetch = (input, init) => window.fetch(input, init) }: AppP
       dashboard={Dashboard}
       requireAuth
       disableTelemetry
-    />
+    >
+      {/* Без <Resource>/<CustomRoutes> ra-core считает админку пустой и вместо входа и панели
+          рисует заглушку «Welcome to React-admin». Ресурсы меню добавляются в T043/T052/T064/T072. */}
+      <CustomRoutes>
+        <Route path={PASSWORD_ROUTE} element={<PasswordPage />} />
+      </CustomRoutes>
+    </Admin>
   );
 }

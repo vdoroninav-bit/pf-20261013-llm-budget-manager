@@ -53,7 +53,7 @@ async def _main() -> None:
     conn = await asyncpg.connect(os.environ["DATABASE_URL"])
     try:
         applied = await migrate(conn)
-        print("применены миграции:", ", ".join(applied) if applied else "нет новых")  # noqa: T201
+        print("применены миграции:", ", ".join(applied) if applied else "нет новых")
     finally:
         await conn.close()
 

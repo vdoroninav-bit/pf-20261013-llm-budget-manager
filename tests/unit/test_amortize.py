@@ -52,10 +52,15 @@ def test_whole_month_window_equals_m() -> None:
 
 def test_start_15th_end_20th() -> None:
     # активна 15–20 октября: 6 дней из 31. За месяц: round(750000 × 6 / 31) = round(145161.29) = 145161
-    whole = amortized(M_41, OCT, date(2026, 10, 15), date(2026, 10, 20), (date(2026, 10, 1), date(2026, 10, 31)))
+    whole = amortized(
+        M_41, OCT, date(2026, 10, 15), date(2026, 10, 20), (date(2026, 10, 1), date(2026, 10, 31))
+    )
     assert whole == 145_161
     # До старта списаний нет
-    assert amortized(M_41, OCT, date(2026, 10, 15), date(2026, 10, 20), (date(2026, 10, 1), date(2026, 10, 14))) == 0
+    assert (
+        amortized(M_41, OCT, date(2026, 10, 15), date(2026, 10, 20), (date(2026, 10, 1), date(2026, 10, 14)))
+        == 0
+    )
     # После окончания списаний нет
     after = (date(2026, 10, 21), date(2026, 10, 31))
     assert amortized(M_41, OCT, date(2026, 10, 15), date(2026, 10, 20), after) == 0

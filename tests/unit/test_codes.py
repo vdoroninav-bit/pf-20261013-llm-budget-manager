@@ -54,12 +54,17 @@ def test_deny_budget_message_has_limit_and_reset_msk() -> None:
 
 
 def test_redirect_message() -> None:
-    text = message(_v(Outcome.REDIRECT, model="C", reserve=500, reason="budget_exceeded", applied=_limit()), "A")
+    text = message(
+        _v(Outcome.REDIRECT, model="C", reserve=500, reason="budget_exceeded", applied=_limit()), "A"
+    )
     assert "перенаправлен на C" in text and "5.00 ₽" in text
 
 
 def test_observed_violation_message() -> None:
-    text = message(_v(Outcome.ALLOW, model="A", reserve=3000, observed_violation="budget_exceeded", applied=_limit()), "A")
+    text = message(
+        _v(Outcome.ALLOW, model="A", reserve=3000, observed_violation="budget_exceeded", applied=_limit()),
+        "A",
+    )
     assert "режим наблюдения" in text
 
 

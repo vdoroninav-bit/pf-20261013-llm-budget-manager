@@ -112,7 +112,9 @@ async def test_budget_lock_row_created_with_owner(db: asyncpg.Connection) -> Non
 
 
 async def test_new_department_defaults_observe_and_fail_open(db: asyncpg.Connection) -> None:
-    row = await db.fetchrow("INSERT INTO department(name) VALUES ('Новое') RETURNING policy_mode, fail_mode, subs_warn_pct")
+    row = await db.fetchrow(
+        "INSERT INTO department(name) VALUES ('Новое') RETURNING policy_mode, fail_mode, subs_warn_pct"
+    )
     assert (row["policy_mode"], row["fail_mode"], row["subs_warn_pct"]) == ("observe", "open", 50)
 
 
@@ -125,9 +127,13 @@ async def test_config_version_single_row(db: asyncpg.Connection) -> None:
 async def test_one_open_assignment_per_employee(db: asyncpg.Connection) -> None:
     d1 = await db.fetchval("INSERT INTO department(name) VALUES ('Д1') RETURNING id")
     d2 = await db.fetchval("INSERT INTO department(name) VALUES ('Д2') RETURNING id")
-    e = await db.fetchval("INSERT INTO employee(pseudonym, ad_login) VALUES ('emp-0000000002', 'p') RETURNING id")
+    e = await db.fetchval(
+        "INSERT INTO employee(pseudonym, ad_login) VALUES ('emp-0000000002', 'p') RETURNING id"
+    )
     await db.execute(
-        "INSERT INTO employee_assignment(employee_id, department_id, valid_from) VALUES ($1, $2, '2026-10-01')", e, d1
+        "INSERT INTO employee_assignment(employee_id, department_id, valid_from) VALUES ($1, $2, '2026-10-01')",
+        e,
+        d1,
     )
     with pytest.raises(asyncpg.UniqueViolationError):
         await db.execute(

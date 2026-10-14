@@ -98,7 +98,9 @@ def process_tz(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.mark.parametrize("tz", ["UTC", "America/New_York", "Asia/Tokyo"])
-def test_result_does_not_depend_on_process_tz(tz: str, monkeypatch: pytest.MonkeyPatch, process_tz: None) -> None:
+def test_result_does_not_depend_on_process_tz(
+    tz: str, monkeypatch: pytest.MonkeyPatch, process_tz: None
+) -> None:
     at = datetime(2026, 10, 31, 22, 30, tzinfo=UTC)  # 01:30 МСК 1 ноября
     expected = {k: bounds(k, at) for k in PeriodKind}
     monkeypatch.setenv("TZ", tz)
