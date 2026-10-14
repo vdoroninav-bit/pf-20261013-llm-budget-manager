@@ -1,0 +1,2251 @@
+openapi: 3.1.0
+info:
+  title: LLM Budget Manager API
+  version: 1.0.0
+  summary: Решения allow/deny/redirect, учёт расхода и бюджеты LLM в рублях.
+  description: |
+    Контракт v1 — источник истины для backend и frontend (`10_constitution.md`, «Процесс»).
+    Изменения вносит только главный архитектор через техлида.
+
+    Общие правила:
+    - JSON, UTF-8. Даты-время — ISO 8601 со смещением `+03:00` (МСК). Даты — `YYYY-MM-DD` по МСК, кроме дат импорта (сутки UTC провайдера, ADR-004).
+    - Деньги — строка-десятичная с двумя знаками (`Money`), внутри — целые копейки.
+    - Ошибки — `application/problem+json` (`Problem`): машинный `code` на английском и `detail` на русском.
+    - Отказ по решению — НЕ ошибка: `POST /decisions` отвечает 200 с `outcome=deny` (ADR-005).
+    - Во всех схемах запросов `additionalProperties: false`: лишние поля дают 422 (принцип I — никакого содержимого запросов моделей).
+    - Аутентификация: вызывающие системы передают заголовок `X-Api-Key`; админка — cookie `bm_session` плюс заголовок `X-CSRF-Token` на изменяющих запросах.
+    - `x-roles` у операции — роли админки, которым она доступна (admin, budget_owner, finance_viewer). budget_owner видит только своё подразделение (иначе 403 и запись в аудит).
+    - Списки: параметры `page` (с 1), `page_size` (≤ 200), `sort`, `order`; ответ `{items, total}`.
+
+    MCP (FR-033, P3): Streamable HTTP на `/mcp`, тот же заголовок `X-Api-Key`. Инструменты — см. `x-mcp-tools`.
+    Результат инструмента — `structuredContent` с той же схемой, что у HTTP. Отказ — `isError=false`, `outcome=deny`.
+    Без ключа или с отозванным ключом — ошибка MCP с кодом `unauthorized`.
+  license:
+    name: Proprietary (исключительные права заказчика)
+x-mcp-tools:
+  - name: request_decision
+    input: '#/components/schemas/DecisionRequest'
+    output: '#/components/schemas/Decision'
+    http_equivalent: POST /api/v1/decisions
+  - name: report_usage
+    input: '#/components/schemas/UsageReport'
+    output: '#/components/schemas/UsageResult'
+    http_equivalent: POST /api/v1/usage
+  - name: get_balance
+    input: '#/components/schemas/BalanceQuery'
+    output: '#/components/schemas/BalanceReport'
+    http_equivalent: GET /api/v1/balance
+servers:
+  - url: http://localhost:8080
+    description: Локальная установка docker compose (BIND_ADDR:API_PORT)
+tags:
+  - name: caller
+    description: Вызывающие системы (ключ X-Api-Key)
+  - name: auth
+  - name: org
+  - name: departments
+  - name: employees
+  - name: models
+  - name: fx
+  - name: subscriptions
+  - name: provider-sources
+  - name: callers
+  - name: admin-users
+  - name: imports
+  - name: reports
+  - name: notifications
+  - name: events
+  - name: audit
+  - name: system
+
+paths:
+  # ---------------------------------------------------------------- caller
+  /api/v1/decisions:
+    post:
+      tags: [caller]
+      operationId: createDecision
+      summary: Запросить решение перед вызовом модели (FR-001…FR-007)
+      security: [{ apiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DecisionRequest' }
+      responses:
+        '200':
+          description: Решение принято (allow, redirect или deny)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Decision' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Субъект вне subject_scope ключа (code=subject_out_of_scope)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/usage:
+    post:
+      tags: [caller]
+      operationId: reportUsage
+      summary: Сообщить фактический расход (FR-008…FR-010)
+      description: |
+        Идемпотентно: повтор с тем же decision_id или с той же парой (ключ, report_id) возвращает status=duplicate, сумма не меняется.
+        Ответ 200 отдаётся только после COMMIT (SC-003).
+      security: [{ apiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsageReport' }
+      responses:
+        '200':
+          description: Расход учтён или распознан как дубль
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsageResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Субъект вне subject_scope ключа
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: decision_id не найден или принадлежит другой вызывающей системе (code=decision_not_found)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/usage/batch:
+    post:
+      tags: [caller]
+      operationId: reportUsageBatch
+      summary: Пакетная досылка буферизованных отчётов (FR-011)
+      security: [{ apiKey: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UsageBatchRequest' }
+      responses:
+        '200':
+          description: Результат по каждой строке; строки обрабатываются независимо
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsageBatchResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '413':
+          description: Больше 1000 строк (code=batch_too_large)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/balance:
+    get:
+      tags: [caller]
+      operationId: getCallerBalance
+      summary: Остатки субъекта по всем применимым лимитам (FR-026)
+      description: Для ключа со scope=service параметр login не передаётся — возвращаются лимиты подразделения ключа.
+      security: [{ apiKey: [] }]
+      parameters:
+        - name: login
+          in: query
+          required: false
+          schema: { type: string, minLength: 1, maxLength: 256 }
+      responses:
+        '200':
+          description: Остатки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BalanceReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: Субъект вне subject_scope ключа
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '404':
+          description: Субъект не найден (code=subject_unknown)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /api/v1/integration-config:
+    get:
+      tags: [caller]
+      operationId: getIntegrationConfig
+      summary: Конфигурация эталонной схемы интеграции (FR-006)
+      security: [{ apiKey: [] }]
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Конфигурация
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IntegrationConfig' }
+        '304':
+          description: Не изменилась
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ---------------------------------------------------------------- auth
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: Вход по локальной учётной записи (FR-030)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Сессия создана, cookie bm_session установлена
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '401':
+          description: Неверный логин или пароль (code=invalid_credentials)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '429':
+          description: Учётная запись временно заблокирована после 10 неудач (code=login_locked)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      responses:
+        '204': { description: Сессия закрыта }
+
+  /api/v1/auth/me:
+    get:
+      tags: [auth]
+      operationId: me
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      responses:
+        '200':
+          description: Текущий пользователь
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/password:
+    post:
+      tags: [auth]
+      operationId: changePassword
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordChange' }
+      responses:
+        '204': { description: Пароль изменён }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ---------------------------------------------------------------- org
+  /api/v1/org/import:
+    post:
+      tags: [org]
+      operationId: importOrg
+      summary: Загрузка выгрузки групп AD (FR-012)
+      description: |
+        CSV UTF-8, разделитель `;`, заголовок `login;display_name;group;is_primary` (is_primary — 1/0 или пусто).
+        Строки с ошибками не применяются, остальные применяются. Сотрудник, которого нет в файле, выводится из подразделения.
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file: { type: string, contentMediaType: text/csv }
+                dry_run: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Сводка
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrgImportSummary' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ---------------------------------------------------------------- departments
+  /api/v1/departments:
+    get:
+      tags: [departments]
+      operationId: listDepartments
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Sort'
+        - $ref: '#/components/parameters/Order'
+        - name: q
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Список (budget_owner видит только своё)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Department' } }
+                  total: { type: integer }
+    post:
+      tags: [departments]
+      operationId: createDepartment
+      summary: Создать подразделение вручную (для служебных субъектов)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepartmentCreate' }
+      responses:
+        '201':
+          description: Создано (policy_mode=observe по умолчанию)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Department' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/departments/{department_id}:
+    parameters:
+      - $ref: '#/components/parameters/DepartmentId'
+    get:
+      tags: [departments]
+      operationId: getDepartment
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      responses:
+        '200':
+          description: Подразделение
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Department' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [departments]
+      operationId: updateDepartment
+      summary: Режим политики, поведение при недоступности, разрешённые модели, порог подписок (FR-013)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DepartmentPatch' }
+      responses:
+        '200':
+          description: Обновлено, запись в аудите
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Department' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/departments/{department_id}/limits:
+    parameters:
+      - $ref: '#/components/parameters/DepartmentId'
+    put:
+      tags: [departments]
+      operationId: putDepartmentLimits
+      summary: Лимиты подразделения в ₽ на день, неделю, месяц (null — лимита нет)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LimitSet' }
+      responses:
+        '200':
+          description: Сохранено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LimitSet' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/departments/{department_id}/balance:
+    parameters:
+      - $ref: '#/components/parameters/DepartmentId'
+    get:
+      tags: [departments]
+      operationId: getDepartmentBalance
+      summary: Лимиты, расход по источникам, резервы, остаток, дата сброса (FR-026, FR-027)
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      parameters:
+        - name: at
+          in: query
+          description: Момент расчёта (по умолчанию — сейчас)
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Остатки
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BalanceReport' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/departments/{department_id}/balance/items:
+    parameters:
+      - $ref: '#/components/parameters/DepartmentId'
+    get:
+      tags: [departments]
+      operationId: listDepartmentBalanceItems
+      summary: Прослеживаемость остатка до событий, строк импорта и подписок (FR-026)
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      parameters:
+        - name: period
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/PeriodKind' }
+        - name: at
+          in: query
+          schema: { type: string, format: date-time }
+        - name: source
+          in: query
+          schema: { $ref: '#/components/schemas/SpendSource' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Строки (subject_pseudonym = null для finance_viewer)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/BalanceItem' } }
+                  total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------- employees
+  /api/v1/employees:
+    get:
+      tags: [employees]
+      operationId: listEmployees
+      summary: Сотрудники под псевдонимами
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner]
+      parameters:
+        - name: department_id
+          in: query
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Список
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Employee' } }
+                  total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/employees/{pseudonym}:
+    parameters:
+      - $ref: '#/components/parameters/Pseudonym'
+    get:
+      tags: [employees]
+      operationId: getEmployee
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner]
+      responses:
+        '200':
+          description: Сотрудник
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Employee' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/employees/{pseudonym}/limits:
+    parameters:
+      - $ref: '#/components/parameters/Pseudonym'
+    put:
+      tags: [employees]
+      operationId: putEmployeeLimits
+      summary: Личные лимиты сотрудника (FR-013)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LimitSet' }
+      responses:
+        '200':
+          description: Сохранено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LimitSet' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/pseudonyms/{pseudonym}:
+    parameters:
+      - $ref: '#/components/parameters/Pseudonym'
+    get:
+      tags: [employees]
+      operationId: revealPseudonym
+      summary: Сопоставление псевдонима с учётной записью (FR-035), с записью в аудит
+      security: [{ session: [] }]
+      x-roles: [admin]
+      responses:
+        '200':
+          description: Учётная запись
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmployeeIdentity' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- models
+  /api/v1/models:
+    get:
+      tags: [models]
+      operationId: listModels
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - $ref: '#/components/parameters/Sort'
+        - $ref: '#/components/parameters/Order'
+      responses:
+        '200':
+          description: Каталог
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Model' } }
+                  total: { type: integer }
+    post:
+      tags: [models]
+      operationId: createModel
+      summary: Добавить модель с начальной ценой (FR-015)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModelCreate' }
+      responses:
+        '201':
+          description: Создано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Model' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422':
+          description: Ошибка валидации или USD-цена без единого курса (code=fx_rate_missing)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /api/v1/models/{model_id}:
+    parameters:
+      - $ref: '#/components/parameters/ModelId'
+    get:
+      tags: [models]
+      operationId: getModel
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      responses:
+        '200':
+          description: Модель
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Model' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [models]
+      operationId: updateModel
+      summary: Возможности, порядок, умолчания, активность (цены — только через /prices)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModelPatch' }
+      responses:
+        '200':
+          description: Обновлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Model' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/models/{model_id}/prices:
+    parameters:
+      - $ref: '#/components/parameters/ModelId'
+    get:
+      tags: [models]
+      operationId: listModelPrices
+      summary: История цен (FR-015, сценарий 3.5)
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      responses:
+        '200':
+          description: История по убыванию valid_from
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ModelPrice' } }
+                  total: { type: integer }
+    post:
+      tags: [models]
+      operationId: createModelPrice
+      summary: Новая цена с даты действия (списанное не пересчитывается)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ModelPriceCreate' }
+      responses:
+        '201':
+          description: Создано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModelPrice' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422':
+          description: Ошибка валидации, valid_from в прошлом или USD без курса (fx_rate_missing)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ---------------------------------------------------------------- fx
+  /api/v1/fx-rates:
+    get:
+      tags: [fx]
+      operationId: listFxRates
+      security: [{ session: [] }]
+      x-roles: [admin, finance_viewer]
+      responses:
+        '200':
+          description: Курсы по месяцам
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/FxRate' } }
+                  total: { type: integer }
+
+  /api/v1/fx-rates/{month}:
+    parameters:
+      - name: month
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$' }
+    put:
+      tags: [fx]
+      operationId: putFxRate
+      summary: Курс USD/₽ на месяц (FR-019); применяется к ещё не обработанным данным
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FxRatePut' }
+      responses:
+        '200':
+          description: Сохранено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FxRate' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ---------------------------------------------------------------- subscriptions
+  /api/v1/subscriptions:
+    get:
+      tags: [subscriptions]
+      operationId: listSubscriptions
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      parameters:
+        - name: department_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: active_on
+          in: query
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Список (budget_owner — только своё подразделение и его сотрудники)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Subscription' } }
+                  total: { type: integer }
+    post:
+      tags: [subscriptions]
+      operationId: createSubscription
+      summary: Ввести подписку (FR-017)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubscriptionCreate' }
+      responses:
+        '201':
+          description: Создано; при доле ≥ порога создаётся уведомление subs_share
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422':
+          description: Ошибка валидации или USD без единого курса (fx_rate_missing)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /api/v1/subscriptions/preview:
+    post:
+      tags: [subscriptions]
+      operationId: previewSubscription
+      summary: Доля бюджета, которую займёт подписка, до сохранения (FR-020)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubscriptionCreate' }
+      responses:
+        '200':
+          description: Предпросмотр
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionPreview' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/subscriptions/{subscription_id}:
+    parameters:
+      - name: subscription_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [subscriptions]
+      operationId: getSubscription
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      responses:
+        '200':
+          description: Подписка
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [subscriptions]
+      operationId: endSubscription
+      summary: Закрыть подписку датой (денежные поля и назначение неизменяемы — ADR-003)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubscriptionPatch' }
+      responses:
+        '200':
+          description: Закрыто; амортизация прошедших дней сохраняется
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [subscriptions]
+      operationId: deleteSubscription
+      summary: Удалить = закрыть сегодняшней датой по МСК (сценарий 4.5)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      responses:
+        '204': { description: Закрыто }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- provider sources
+  /api/v1/provider-sources:
+    get:
+      tags: [provider-sources]
+      operationId: listProviderSources
+      security: [{ session: [] }]
+      x-roles: [admin]
+      responses:
+        '200':
+          description: Справочник источников (FR-022)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ProviderSource' } }
+                  total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [provider-sources]
+      operationId: createProviderSource
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProviderSourceCreate' }
+      responses:
+        '201':
+          description: Создано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProviderSource' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Источник (provider, ref) уже есть — ровно один способ учёта (code=source_exists)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+        '422':
+          description: Ошибка валидации; для anthropic допустим только kind=workspace (code=unsupported_source_kind)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  /api/v1/provider-sources/{source_id}:
+    parameters:
+      - name: source_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [provider-sources]
+      operationId: updateProviderSource
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ProviderSourcePatch' }
+      responses:
+        '200':
+          description: Обновлено; статусы строк пересчитаются при следующей загрузке окна
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProviderSource' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [provider-sources]
+      operationId: deleteProviderSource
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      responses:
+        '204': { description: Удалено; строки источника станут «не распределено» при следующей загрузке }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- callers
+  /api/v1/callers:
+    get:
+      tags: [callers]
+      operationId: listCallers
+      security: [{ session: [] }]
+      x-roles: [admin]
+      responses:
+        '200':
+          description: Вызывающие системы (без ключей)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Caller' } }
+                  total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [callers]
+      operationId: createCaller
+      summary: Выдать ключ (FR-016); ключ возвращается один раз
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CallerCreate' }
+      responses:
+        '201':
+          description: Создано
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CallerCreated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/callers/{caller_id}:
+    parameters:
+      - name: caller_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [callers]
+      operationId: updateCaller
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CallerPatch' }
+      responses:
+        '200':
+          description: Обновлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Caller' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/callers/{caller_id}/revoke:
+    parameters:
+      - name: caller_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [callers]
+      operationId: revokeCaller
+      summary: Отозвать ключ (действует немедленно)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      responses:
+        '200':
+          description: Отозван
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Caller' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- admin users
+  /api/v1/admin-users:
+    get:
+      tags: [admin-users]
+      operationId: listAdminUsers
+      security: [{ session: [] }]
+      x-roles: [admin]
+      responses:
+        '200':
+          description: Учётные записи админки
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AdminUser' } }
+                  total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [admin-users]
+      operationId: createAdminUser
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminUserCreate' }
+      responses:
+        '201':
+          description: Создано (must_change_password=true)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /api/v1/admin-users/{user_id}:
+    parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    patch:
+      tags: [admin-users]
+      operationId: updateAdminUser
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdminUserPatch' }
+      responses:
+        '200':
+          description: Обновлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AdminUser' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ---------------------------------------------------------------- imports
+  /api/v1/imports/status:
+    get:
+      tags: [imports]
+      operationId: getImportStatus
+      summary: Включён ли импорт, ключ задан/не задан, последняя успешная загрузка, отставание (FR-025)
+      security: [{ session: [] }]
+      x-roles: [admin, finance_viewer]
+      responses:
+        '200':
+          description: Статус
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportStatus' }
+
+  /api/v1/imports/runs:
+    get:
+      tags: [imports]
+      operationId: listImportRuns
+      security: [{ session: [] }]
+      x-roles: [admin]
+      parameters:
+        - name: provider
+          in: query
+          schema: { $ref: '#/components/schemas/Provider' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Запуски
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ImportRun' } }
+                  total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/imports/run:
+    post:
+      tags: [imports]
+      operationId: runImport
+      summary: Запустить загрузку вручную (выполняет worker)
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ImportRunRequest' }
+      responses:
+        '202':
+          description: Поставлено в очередь worker
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportRun' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409':
+          description: Импорт выключен флагом (code=import_disabled) или ключ не задан (code=provider_key_missing)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
+
+  # ---------------------------------------------------------------- reports
+  /api/v1/reports/spend:
+    get:
+      tags: [reports]
+      operationId: getSpendReport
+      summary: Расход по подразделениям, моделям, источникам (FR-027, FR-028)
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: department_id
+          in: query
+          description: Пусто — все доступные; значение `unallocated` — «не распределено»
+          schema: { type: string }
+        - name: group_by
+          in: query
+          schema:
+            type: array
+            items: { type: string, enum: [department, model, source, day, month] }
+          style: form
+          explode: false
+      responses:
+        '200':
+          description: Строки отчёта (без идентификаторов сотрудников)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total_rub]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SpendRow' } }
+                  total_rub: { $ref: '#/components/schemas/Money' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/reports/spend.csv:
+    get:
+      tags: [reports]
+      operationId: getSpendCsv
+      summary: CSV расхода за период (FR-028), UTF-8 с BOM, разделитель `;`
+      description: |
+        Колонки: period_start;department;model;source;amount_rub;original_currency;original_amount.
+        Значения, начинающиеся с = + - @, экранируются префиксом `'` (защита от CSV-инъекции).
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner, finance_viewer]
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: department_id
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Файл
+          content:
+            text/csv:
+              schema: { type: string }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/reports/reconciliation:
+    get:
+      tags: [reports]
+      operationId: getReconciliation
+      summary: Сверка Decision API с импортом по источникам mode=decision_api (SC-005)
+      security: [{ session: [] }]
+      x-roles: [admin, finance_viewer]
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema: { type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$' }
+      responses:
+        '200':
+          description: Строки сверки
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ReconciliationRow' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------- notifications
+  /api/v1/notifications:
+    get:
+      tags: [notifications]
+      operationId: listNotifications
+      summary: Уведомления в админке (FR-020, FR-025, FR-029)
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner]
+      parameters:
+        - name: unread
+          in: query
+          schema: { type: boolean }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Список (budget_owner — только своего подразделения)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+                  total: { type: integer }
+
+  /api/v1/notifications/{notification_id}/read:
+    parameters:
+      - name: notification_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [notifications]
+      operationId: markNotificationRead
+      security: [{ session: [], csrf: [] }]
+      x-roles: [admin, budget_owner]
+      responses:
+        '204': { description: Отмечено }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------------------------------------------------------- events
+  /api/v1/events:
+    get:
+      tags: [events]
+      operationId: listEvents
+      summary: Журнал решений и расхода (метаданные, псевдонимы)
+      security: [{ session: [] }]
+      x-roles: [admin, budget_owner]
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: department_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: outcome
+          in: query
+          schema: { $ref: '#/components/schemas/Outcome' }
+        - name: code
+          in: query
+          schema: { $ref: '#/components/schemas/DenyCode' }
+        - name: flag
+          in: query
+          schema: { $ref: '#/components/schemas/EventFlag' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: События
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CallEvent' } }
+                  total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------- audit
+  /api/v1/audit:
+    get:
+      tags: [audit]
+      operationId: listAudit
+      summary: Журнал аудита (FR-031)
+      security: [{ session: [] }]
+      x-roles: [admin]
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: object_type
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: Записи
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
+                  total: { type: integer }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------- system
+  /healthz:
+    get:
+      tags: [system]
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: Процесс жив
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /readyz:
+    get:
+      tags: [system]
+      operationId: readyz
+      security: []
+      responses:
+        '200':
+          description: БД доступна, миграции применены
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+        '503':
+          description: Не готов
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /metrics:
+    get:
+      tags: [system]
+      operationId: metrics
+      summary: Метрики Prometheus (decision_latency_seconds, decisions_total, reports_total, reservations_open, import_lag_hours, job_failures_total)
+      security: []
+      responses:
+        '200':
+          description: text/plain; version=0.0.4
+          content:
+            text/plain:
+              schema: { type: string }
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Ключ вызывающей системы `bm_<prefix>_<secret>`; хранится только SHA-256
+    session:
+      type: apiKey
+      in: cookie
+      name: bm_session
+    csrf:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    Sort:
+      name: sort
+      in: query
+      schema: { type: string }
+    Order:
+      name: order
+      in: query
+      schema: { type: string, enum: [asc, desc], default: asc }
+    From:
+      name: from
+      in: query
+      required: true
+      schema: { type: string, format: date }
+    To:
+      name: to
+      in: query
+      required: true
+      description: Включительно
+      schema: { type: string, format: date }
+    DepartmentId:
+      name: department_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ModelId:
+      name: model_id
+      in: path
+      required: true
+      description: Идентификатор модели так, как его передаёт вызывающая система (URL-кодированный)
+      schema: { type: string }
+    Pseudonym:
+      name: pseudonym
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Pseudonym' }
+
+  responses:
+    Unauthorized:
+      description: Нет ключа/сессии, ключ отозван (code=unauthorized)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Forbidden:
+      description: Роль не позволяет или чужое подразделение (code=forbidden); попытка пишется в аудит
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    NotFound:
+      description: Не найдено (code=not_found)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    Conflict:
+      description: Конфликт уникальности (code=conflict)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    ValidationError:
+      description: Ошибка валидации (code=validation_error)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+
+  schemas:
+    # ------------------------------------------------ базовые
+    Money:
+      type: string
+      pattern: '^-?[0-9]+\.[0-9]{2}$'
+      description: Сумма в ₽ с двумя знаками; внутри — целые копейки
+      examples: ['30.00']
+    PriceDecimal:
+      type: string
+      pattern: '^[0-9]+(\.[0-9]{1,6})?$'
+      description: Цена за 1 000 токенов в валюте модели
+      examples: ['0.75']
+    RateDecimal:
+      type: string
+      pattern: '^[0-9]+(\.[0-9]{1,4})?$'
+      examples: ['92.5000']
+    Pseudonym:
+      type: string
+      pattern: '^emp-[0-9a-f]{10}$'
+      examples: ['emp-7f3a9c01b2']
+    Currency:
+      type: string
+      enum: [RUB, USD]
+    PeriodKind:
+      type: string
+      enum: [day, week, month]
+    OwnerType:
+      type: string
+      enum: [employee, department]
+    PolicyMode:
+      type: string
+      enum: [observe, warn, enforce]
+      description: наблюдать / предупреждать / ограничивать (FR-005)
+    FailMode:
+      type: string
+      enum: [open, closed]
+    ModelKind:
+      type: string
+      enum: [chat, embedding]
+    Outcome:
+      type: string
+      enum: [allow, redirect, deny]
+    DenyCode:
+      type: string
+      enum: [model_not_allowed, budget_exceeded, model_unknown, subject_unknown]
+      description: Единые для HTTP API и MCP (FR-002)
+    Provider:
+      type: string
+      enum: [anthropic, openai]
+    SpendSource:
+      type: string
+      enum: [token, import, subscription, reservation]
+    EventFlag:
+      type: string
+      enum: [duplicate, no_report, no_decision, decision_not_followed, over_limit_observed, model_not_allowed_observed]
+    Role:
+      type: string
+      enum: [admin, budget_owner, finance_viewer]
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: { type: string, default: 'about:blank' }
+        title: { type: string }
+        status: { type: integer }
+        code:
+          type: string
+          description: Машинный код на английском
+          examples: [validation_error, unauthorized, forbidden, subject_out_of_scope, decision_not_found, fx_rate_missing, unsupported_source_kind, source_exists, import_disabled, provider_key_missing, batch_too_large, login_locked, invalid_credentials, not_found, conflict]
+        detail: { type: string, description: Сообщение на русском }
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field: { type: string }
+              message: { type: string }
+
+    # ------------------------------------------------ Decision API
+    EmployeeSubject:
+      type: object
+      additionalProperties: false
+      required: [type, login]
+      properties:
+        type: { const: employee }
+        login: { type: string, minLength: 1, maxLength: 256, description: Учётная запись AD }
+    ServiceSubject:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { const: service }
+    SubjectRef:
+      oneOf:
+        - $ref: '#/components/schemas/EmployeeSubject'
+        - $ref: '#/components/schemas/ServiceSubject'
+      discriminator:
+        propertyName: type
+        mapping:
+          employee: '#/components/schemas/EmployeeSubject'
+          service: '#/components/schemas/ServiceSubject'
+    Needs:
+      type: object
+      additionalProperties: false
+      properties:
+        tools: { type: boolean, default: false }
+        json_mode: { type: boolean, default: false }
+        context_tokens: { type: integer, minimum: 0, default: 0 }
+    DecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [subject, model, kind]
+      properties:
+        subject: { $ref: '#/components/schemas/SubjectRef' }
+        model: { type: string, minLength: 1, maxLength: 200 }
+        kind: { $ref: '#/components/schemas/ModelKind' }
+        input_tokens:
+          type: integer
+          minimum: 0
+          description: Оценка входных токенов; нет — default_input_tokens модели
+        max_output_tokens:
+          type: integer
+          minimum: 0
+          description: Максимум выходных токенов; нет — default_output_tokens модели
+        needs: { $ref: '#/components/schemas/Needs' }
+    AppliedLimit:
+      type: object
+      required: [owner_type, owner_ref, period, limit_rub, remaining_rub, period_start, resets_at]
+      properties:
+        owner_type: { $ref: '#/components/schemas/OwnerType' }
+        owner_ref:
+          type: string
+          description: Псевдоним сотрудника или id подразделения
+        period: { $ref: '#/components/schemas/PeriodKind' }
+        limit_rub: { $ref: '#/components/schemas/Money' }
+        remaining_rub: { $ref: '#/components/schemas/Money' }
+        period_start: { type: string, format: date-time }
+        resets_at: { type: string, format: date-time, description: Сброс по МСК }
+    Estimate:
+      type: object
+      required: [input_tokens, output_tokens, source]
+      properties:
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        source: { type: string, enum: [request, catalog_default] }
+    Decision:
+      type: object
+      required: [decision_id, outcome, requested_model, http_status_hint, policy_mode, fail_mode, reserve_rub, budget_blocked_by_subscriptions, message, created_at]
+      properties:
+        decision_id: { type: string, format: uuid }
+        outcome: { $ref: '#/components/schemas/Outcome' }
+        code:
+          description: Только при outcome=deny
+          oneOf:
+            - $ref: '#/components/schemas/DenyCode'
+            - type: 'null'
+        reason:
+          description: Только при outcome=redirect
+          type: [string, 'null']
+          enum: [budget_exceeded, null]
+        requested_model: { type: string }
+        model:
+          type: [string, 'null']
+          description: Итоговая модель (null при deny)
+        reserve_rub: { $ref: '#/components/schemas/Money' }
+        expires_at: { type: [string, 'null'], format: date-time }
+        http_status_hint:
+          type: integer
+          enum: [200, 403, 422, 429]
+          description: 'Подсказка шлюзу: model_not_allowed→403, budget_exceeded→429, model_unknown/subject_unknown→422 (ADR-005)'
+        policy_mode: { $ref: '#/components/schemas/PolicyMode' }
+        fail_mode: { $ref: '#/components/schemas/FailMode' }
+        department_id: { type: [string, 'null'], format: uuid }
+        observed_violation:
+          type: [string, 'null']
+          enum: [budget_exceeded, model_not_allowed, null]
+          description: Нарушение, пропущенное в режимах observe/warn
+        applied_limit:
+          oneOf:
+            - $ref: '#/components/schemas/AppliedLimit'
+            - type: 'null'
+        estimate:
+          oneOf:
+            - $ref: '#/components/schemas/Estimate'
+            - type: 'null'
+        budget_blocked_by_subscriptions: { type: boolean }
+        message: { type: string, description: Понятное объяснение на русском }
+        created_at: { type: string, format: date-time }
+
+    # ------------------------------------------------ Usage
+    TokenCounts:
+      type: object
+      additionalProperties: false
+      required: [input, output]
+      properties:
+        input: { type: integer, minimum: 0 }
+        output: { type: integer, minimum: 0 }
+        cached: { type: integer, minimum: 0, default: 0, description: 'Тарифицируются по cached_input_per_1k, иначе по цене входа' }
+    UsageReport:
+      type: object
+      additionalProperties: false
+      required: [report_id, tokens, call_status]
+      description: С decision_id — по решению. Без него обязательны subject, model, occurred_at (вызов при fail-open).
+      properties:
+        report_id: { type: string, format: uuid, description: Генерирует клиент; ключ идемпотентности вместе с ключом вызывающей системы }
+        decision_id: { type: [string, 'null'], format: uuid }
+        subject: { $ref: '#/components/schemas/SubjectRef' }
+        model: { type: string, minLength: 1, maxLength: 200 }
+        actual_model: { type: string, minLength: 1, maxLength: 200, description: Если отличается от модели решения — флаг decision_not_followed }
+        occurred_at: { type: string, format: date-time, description: Не раньше 7 суток назад }
+        tokens: { $ref: '#/components/schemas/TokenCounts' }
+        call_status: { type: string, enum: [ok, aborted, error] }
+    UsageResult:
+      type: object
+      required: [report_id, status, amount_rub, flags, expense_date]
+      properties:
+        report_id: { type: string, format: uuid }
+        decision_id: { type: [string, 'null'], format: uuid }
+        status: { type: string, enum: [charged, duplicate] }
+        amount_rub: { $ref: '#/components/schemas/Money' }
+        flags: { type: array, items: { $ref: '#/components/schemas/EventFlag' } }
+        expense_date: { type: string, format: date, description: Дата расхода по МСК }
+    UsageBatchRequest:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/UsageReport' }
+    UsageBatchResult:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            type: object
+            required: [index, ok]
+            properties:
+              index: { type: integer }
+              ok: { type: boolean }
+              result: { $ref: '#/components/schemas/UsageResult' }
+              error: { $ref: '#/components/schemas/Problem' }
+
+    # ------------------------------------------------ Balance
+    BalanceQuery:
+      type: object
+      additionalProperties: false
+      properties:
+        login: { type: string }
+    SpentBySource:
+      type: object
+      required: [token_rub, import_rub, subscriptions_rub]
+      properties:
+        token_rub: { $ref: '#/components/schemas/Money' }
+        import_rub: { $ref: '#/components/schemas/Money' }
+        subscriptions_rub: { $ref: '#/components/schemas/Money' }
+    LimitBalance:
+      type: object
+      required: [owner_type, owner_ref, period, period_start, resets_at, limit_rub, spent, reserved_rub, remaining_rub, used_pct, over_limit]
+      properties:
+        owner_type: { $ref: '#/components/schemas/OwnerType' }
+        owner_ref: { type: string }
+        period: { $ref: '#/components/schemas/PeriodKind' }
+        period_start: { type: string, format: date-time }
+        resets_at: { type: string, format: date-time }
+        limit_rub: { $ref: '#/components/schemas/Money' }
+        spent: { $ref: '#/components/schemas/SpentBySource' }
+        reserved_rub: { $ref: '#/components/schemas/Money' }
+        remaining_rub: { $ref: '#/components/schemas/Money', description: Может быть отрицательным }
+        used_pct: { type: string, pattern: '^-?[0-9]+\.[0-9]{1}$' }
+        over_limit: { type: boolean }
+        subscriptions_share_pct: { type: string, pattern: '^[0-9]+\.[0-9]{1}$' }
+    BalanceReport:
+      type: object
+      required: [as_of, owner_type, owner_ref, limits]
+      properties:
+        as_of: { type: string, format: date-time }
+        owner_type: { $ref: '#/components/schemas/OwnerType' }
+        owner_ref: { type: string }
+        department_id: { type: [string, 'null'], format: uuid }
+        policy_mode: { $ref: '#/components/schemas/PolicyMode' }
+        limits:
+          type: array
+          description: Пусто — лимиты не заданы (ограничения нет)
+          items: { $ref: '#/components/schemas/LimitBalance' }
+    BalanceItem:
+      type: object
+      required: [source, ref_id, date, amount_rub]
+      properties:
+        source: { $ref: '#/components/schemas/SpendSource' }
+        ref_id: { type: string, description: call_record.id / import_line key / subscription.id }
+        date: { type: string, format: date }
+        model_id: { type: [string, 'null'] }
+        subject_pseudonym: { oneOf: [{ $ref: '#/components/schemas/Pseudonym' }, { type: 'null' }] }
+        amount_rub: { $ref: '#/components/schemas/Money' }
+        flags: { type: array, items: { $ref: '#/components/schemas/EventFlag' } }
+
+    IntegrationConfig:
+      type: object
+      required: [version, timeout_ms, refresh_s, default_fail_mode, departments]
+      properties:
+        version: { type: string }
+        timeout_ms: { type: integer, default: 50 }
+        refresh_s: { type: integer, default: 60 }
+        default_fail_mode: { $ref: '#/components/schemas/FailMode' }
+        departments:
+          type: array
+          items:
+            type: object
+            required: [department_id, fail_mode]
+            properties:
+              department_id: { type: string, format: uuid }
+              fail_mode: { $ref: '#/components/schemas/FailMode' }
+
+    # ------------------------------------------------ Admin
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [login, password]
+      properties:
+        login: { type: string, minLength: 1 }
+        password: { type: string, minLength: 1, format: password }
+    Session:
+      type: object
+      required: [user, csrf_token]
+      properties:
+        user: { $ref: '#/components/schemas/AdminUser' }
+        csrf_token: { type: string }
+    PasswordChange:
+      type: object
+      additionalProperties: false
+      required: [old_password, new_password]
+      properties:
+        old_password: { type: string, format: password }
+        new_password: { type: string, minLength: 12, format: password }
+    AdminUser:
+      type: object
+      required: [id, login, role, active, must_change_password]
+      properties:
+        id: { type: string, format: uuid }
+        login: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        department_id: { type: [string, 'null'], format: uuid, description: Обязательно для budget_owner }
+        active: { type: boolean }
+        must_change_password: { type: boolean }
+    AdminUserCreate:
+      type: object
+      additionalProperties: false
+      required: [login, password, role]
+      properties:
+        login: { type: string, minLength: 1, maxLength: 128 }
+        password: { type: string, minLength: 12, format: password }
+        role: { $ref: '#/components/schemas/Role' }
+        department_id: { type: [string, 'null'], format: uuid }
+    AdminUserPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        role: { $ref: '#/components/schemas/Role' }
+        department_id: { type: [string, 'null'], format: uuid }
+        active: { type: boolean }
+        reset_password: { type: string, minLength: 12, format: password }
+
+    OrgImportSummary:
+      type: object
+      required: [dry_run, departments_added, employees_added, employees_updated, employees_moved, employees_removed, rows_total, rows_applied, errors, warnings]
+      properties:
+        dry_run: { type: boolean }
+        departments_added: { type: integer }
+        employees_added: { type: integer }
+        employees_updated: { type: integer }
+        employees_moved: { type: integer }
+        employees_removed: { type: integer, description: Выведено из подразделения (нет в файле) }
+        rows_total: { type: integer }
+        rows_applied: { type: integer }
+        errors:
+          type: array
+          items: { $ref: '#/components/schemas/RowMessage' }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/RowMessage' }
+    RowMessage:
+      type: object
+      required: [line, message]
+      properties:
+        line: { type: integer }
+        message: { type: string }
+
+    LimitSet:
+      type: object
+      additionalProperties: false
+      required: [day, week, month]
+      properties:
+        day: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        week: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        month: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+    Department:
+      type: object
+      required: [id, name, policy_mode, fail_mode, allowed_models, subs_warn_pct, limits, employees_count]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        ad_group: { type: [string, 'null'] }
+        policy_mode: { $ref: '#/components/schemas/PolicyMode' }
+        fail_mode: { $ref: '#/components/schemas/FailMode' }
+        allowed_models: { type: array, items: { type: string }, description: Пусто — ничего не разрешено }
+        subs_warn_pct: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        limits: { $ref: '#/components/schemas/LimitSet' }
+        employees_count: { type: integer }
+    DepartmentCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        ad_group: { type: [string, 'null'] }
+    DepartmentPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        policy_mode: { $ref: '#/components/schemas/PolicyMode' }
+        fail_mode: { $ref: '#/components/schemas/FailMode' }
+        allowed_models: { type: array, items: { type: string } }
+        subs_warn_pct: { type: integer, minimum: 1, maximum: 100 }
+    Employee:
+      type: object
+      required: [pseudonym, active, limits]
+      properties:
+        pseudonym: { $ref: '#/components/schemas/Pseudonym' }
+        department_id: { type: [string, 'null'], format: uuid }
+        active: { type: boolean }
+        limits: { $ref: '#/components/schemas/LimitSet' }
+    EmployeeIdentity:
+      type: object
+      required: [pseudonym, login]
+      properties:
+        pseudonym: { $ref: '#/components/schemas/Pseudonym' }
+        login: { type: string }
+        display_name: { type: [string, 'null'] }
+
+    Model:
+      type: object
+      required: [id, provider, kind, supports_tools, supports_json, max_context, default_input_tokens, default_output_tokens, tie_order, active, current_price]
+      properties:
+        id: { type: string, description: Как передаёт вызывающая система }
+        provider: { type: string, description: 'Свободная строка: gigachat, yandexgpt, anthropic, openai, internal…' }
+        kind: { $ref: '#/components/schemas/ModelKind' }
+        supports_tools: { type: boolean }
+        supports_json: { type: boolean }
+        max_context: { type: integer, minimum: 1 }
+        default_input_tokens: { type: integer, minimum: 0 }
+        default_output_tokens: { type: integer, minimum: 0 }
+        tie_order: { type: integer, description: Порядок при равной цене (по возрастанию) }
+        active: { type: boolean }
+        current_price: { $ref: '#/components/schemas/ModelPrice' }
+    ModelCreate:
+      type: object
+      additionalProperties: false
+      required: [id, provider, kind, supports_tools, supports_json, max_context, default_input_tokens, default_output_tokens, price]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 200 }
+        provider: { type: string, minLength: 1, maxLength: 64 }
+        kind: { $ref: '#/components/schemas/ModelKind' }
+        supports_tools: { type: boolean }
+        supports_json: { type: boolean }
+        max_context: { type: integer, minimum: 1 }
+        default_input_tokens: { type: integer, minimum: 0 }
+        default_output_tokens: { type: integer, minimum: 0 }
+        tie_order: { type: integer, default: 100 }
+        price: { $ref: '#/components/schemas/ModelPriceCreate' }
+    ModelPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        supports_tools: { type: boolean }
+        supports_json: { type: boolean }
+        max_context: { type: integer, minimum: 1 }
+        default_input_tokens: { type: integer, minimum: 0 }
+        default_output_tokens: { type: integer, minimum: 0 }
+        tie_order: { type: integer }
+        active: { type: boolean }
+    ModelPrice:
+      type: object
+      required: [id, model_id, valid_from, input_per_1k, output_per_1k, currency]
+      properties:
+        id: { type: string, format: uuid }
+        model_id: { type: string }
+        valid_from: { type: string, format: date-time }
+        input_per_1k: { $ref: '#/components/schemas/PriceDecimal' }
+        output_per_1k: { $ref: '#/components/schemas/PriceDecimal' }
+        cached_input_per_1k: { oneOf: [{ $ref: '#/components/schemas/PriceDecimal' }, { type: 'null' }] }
+        currency: { $ref: '#/components/schemas/Currency' }
+    ModelPriceCreate:
+      type: object
+      additionalProperties: false
+      required: [input_per_1k, output_per_1k, currency]
+      properties:
+        valid_from: { type: string, format: date-time, description: По умолчанию — сейчас; не в прошлом }
+        input_per_1k: { $ref: '#/components/schemas/PriceDecimal' }
+        output_per_1k: { $ref: '#/components/schemas/PriceDecimal' }
+        cached_input_per_1k: { oneOf: [{ $ref: '#/components/schemas/PriceDecimal' }, { type: 'null' }] }
+        currency: { $ref: '#/components/schemas/Currency' }
+
+    FxRate:
+      type: object
+      required: [month, usd_rub, entered_by, entered_at]
+      properties:
+        month: { type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$' }
+        usd_rub: { $ref: '#/components/schemas/RateDecimal' }
+        entered_by: { type: string }
+        entered_at: { type: string, format: date-time }
+    FxRatePut:
+      type: object
+      additionalProperties: false
+      required: [usd_rub]
+      properties:
+        usd_rub: { $ref: '#/components/schemas/RateDecimal' }
+
+    SubscriptionAssignee:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [employee, department, unallocated] }
+        ref:
+          type: [string, 'null']
+          description: Псевдоним сотрудника или id подразделения; null для unallocated
+    Subscription:
+      type: object
+      required: [id, provider, plan, seat_price, currency, seats, start_date, assignee, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string }
+        plan: { type: string }
+        seat_price: { $ref: '#/components/schemas/PriceDecimal' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        seats: { type: integer, minimum: 1 }
+        start_date: { type: string, format: date }
+        end_date: { type: [string, 'null'], format: date, description: Включительно }
+        assignee: { $ref: '#/components/schemas/SubscriptionAssignee' }
+        monthly_total_rub: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }], description: null — нет курса }
+        fx_warning: { type: [string, 'null'], enum: [last_known_rate_used, no_rate, null] }
+        created_at: { type: string, format: date-time }
+    SubscriptionCreate:
+      type: object
+      additionalProperties: false
+      required: [provider, plan, seat_price, currency, seats, start_date, assignee]
+      properties:
+        provider: { type: string, minLength: 1, maxLength: 64 }
+        plan: { type: string, minLength: 1, maxLength: 128 }
+        seat_price: { $ref: '#/components/schemas/PriceDecimal' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        seats: { type: integer, minimum: 1 }
+        start_date: { type: string, format: date }
+        end_date: { type: [string, 'null'], format: date }
+        assignee: { $ref: '#/components/schemas/SubscriptionAssignee' }
+    SubscriptionPatch:
+      type: object
+      additionalProperties: false
+      required: [end_date]
+      properties:
+        end_date: { type: string, format: date }
+    SubscriptionPreview:
+      type: object
+      required: [department_id, periods, warn_threshold_pct, warn]
+      properties:
+        department_id: { type: [string, 'null'], format: uuid }
+        periods:
+          type: array
+          items:
+            type: object
+            required: [period, amortization_rub]
+            properties:
+              period: { $ref: '#/components/schemas/PeriodKind' }
+              limit_rub: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+              amortization_rub: { $ref: '#/components/schemas/Money', description: Все подписки владельца с учётом новой за текущий период }
+              share_pct: { type: [string, 'null'] }
+        warn_threshold_pct: { type: integer }
+        warn: { type: boolean }
+        fx_warning: { type: [string, 'null'], enum: [last_known_rate_used, no_rate, null] }
+
+    ProviderSource:
+      type: object
+      required: [id, provider, kind, ref, mode]
+      properties:
+        id: { type: string, format: uuid }
+        provider: { $ref: '#/components/schemas/Provider' }
+        kind: { type: string, enum: [workspace, project, api_key] }
+        ref: { type: string, description: workspace_id / project_id / api_key_id провайдера }
+        display_name: { type: [string, 'null'] }
+        department_id: { type: [string, 'null'], format: uuid }
+        mode: { type: string, enum: [import, decision_api], description: 'Ровно один способ учёта (FR-022, FR-023)' }
+    ProviderSourceCreate:
+      type: object
+      additionalProperties: false
+      required: [provider, kind, ref, department_id, mode]
+      properties:
+        provider: { $ref: '#/components/schemas/Provider' }
+        kind: { type: string, enum: [workspace, project, api_key] }
+        ref: { type: string, minLength: 1, maxLength: 200 }
+        display_name: { type: [string, 'null'], maxLength: 200 }
+        department_id: { type: string, format: uuid }
+        mode: { type: string, enum: [import, decision_api] }
+    ProviderSourcePatch:
+      type: object
+      additionalProperties: false
+      properties:
+        display_name: { type: [string, 'null'] }
+        department_id: { type: string, format: uuid }
+        mode: { type: string, enum: [import, decision_api] }
+
+    SubjectScope:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [service, department_employees, any_employee] }
+        department_id:
+          type: [string, 'null']
+          format: uuid
+          description: Обязателен для service и department_employees
+    Caller:
+      type: object
+      required: [id, name, key_prefix, subject_scope, status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        key_prefix: { type: string }
+        subject_scope: { $ref: '#/components/schemas/SubjectScope' }
+        provider_source_id: { type: [string, 'null'], format: uuid, description: Для сверки SC-005 }
+        status: { type: string, enum: [active, revoked] }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+    CallerCreate:
+      type: object
+      additionalProperties: false
+      required: [name, subject_scope]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        subject_scope: { $ref: '#/components/schemas/SubjectScope' }
+        provider_source_id: { type: [string, 'null'], format: uuid }
+    CallerCreated:
+      allOf:
+        - $ref: '#/components/schemas/Caller'
+        - type: object
+          required: [api_key]
+          properties:
+            api_key: { type: string, description: Показывается один раз }
+    CallerPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        provider_source_id: { type: [string, 'null'], format: uuid }
+
+    ImportStatus:
+      type: object
+      required: [enabled, providers]
+      properties:
+        enabled: { type: boolean }
+        providers:
+          type: array
+          items:
+            type: object
+            required: [provider, configured, consecutive_failures]
+            properties:
+              provider: { $ref: '#/components/schemas/Provider' }
+              configured: { type: boolean, description: Ключ задан (значение никогда не отдаётся) }
+              last_success_day: { type: [string, 'null'], format: date }
+              last_run_at: { type: [string, 'null'], format: date-time }
+              lag_hours: { type: [integer, 'null'] }
+              consecutive_failures: { type: integer }
+              last_error_class: { type: [string, 'null'] }
+              unallocated_sources: { type: array, items: { type: string } }
+    ImportRun:
+      type: object
+      required: [id, provider, status]
+      properties:
+        id: { type: string, format: uuid }
+        provider: { $ref: '#/components/schemas/Provider' }
+        status: { type: string, enum: [queued, running, ok, failed] }
+        started_at: { type: [string, 'null'], format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+        day_from: { type: string, format: date }
+        day_to: { type: string, format: date }
+        lines_charged: { type: integer }
+        lines_reconcile: { type: integer }
+        lines_unallocated: { type: integer }
+        lines_changed: { type: integer }
+        error_class: { type: [string, 'null'] }
+    ImportRunRequest:
+      type: object
+      additionalProperties: false
+      required: [provider]
+      properties:
+        provider: { $ref: '#/components/schemas/Provider' }
+        day_from: { type: string, format: date }
+        day_to: { type: string, format: date }
+
+    SpendRow:
+      type: object
+      required: [amount_rub]
+      properties:
+        period_start: { type: [string, 'null'], format: date }
+        department_id: { type: [string, 'null'], description: null — «не распределено» }
+        department_name: { type: [string, 'null'] }
+        model_id: { type: [string, 'null'] }
+        source: { oneOf: [{ $ref: '#/components/schemas/SpendSource' }, { type: 'null' }] }
+        amount_rub: { $ref: '#/components/schemas/Money' }
+        original_currency: { oneOf: [{ $ref: '#/components/schemas/Currency' }, { type: 'null' }] }
+        original_amount: { type: [string, 'null'] }
+        late: { type: boolean, description: Поздний импорт за закрытый период }
+    ReconciliationRow:
+      type: object
+      required: [month, provider, source_ref, imported_rub, decision_api_rub, diff_rub]
+      properties:
+        month: { type: string }
+        provider: { $ref: '#/components/schemas/Provider' }
+        source_ref: { type: string }
+        department_id: { type: [string, 'null'], format: uuid }
+        imported_rub: { $ref: '#/components/schemas/Money' }
+        decision_api_rub: { $ref: '#/components/schemas/Money' }
+        diff_rub: { $ref: '#/components/schemas/Money' }
+        diff_pct: { type: [string, 'null'] }
+        coverage_pct: { type: [string, 'null'], description: 'Доля импорта, подтверждённая событиями утилиты' }
+
+    Notification:
+      type: object
+      required: [id, kind, created_at, message, read]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [threshold_80, threshold_100, subs_share, import_failure, import_unallocated, fx_missing, reservation_no_report] }
+        department_id: { type: [string, 'null'], format: uuid }
+        period: { oneOf: [{ $ref: '#/components/schemas/PeriodKind' }, { type: 'null' }] }
+        period_start: { type: [string, 'null'], format: date }
+        message: { type: string, description: На русском }
+        created_at: { type: string, format: date-time }
+        read: { type: boolean }
+        webhook_status: { type: string, enum: [disabled, pending, delivered, failed] }
+
+    CallEvent:
+      type: object
+      required: [id, created_at, caller_name, requested_model, outcome, status, flags]
+      properties:
+        id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        caller_name: { type: string }
+        subject_pseudonym: { oneOf: [{ $ref: '#/components/schemas/Pseudonym' }, { type: 'null' }] }
+        department_id: { type: [string, 'null'], format: uuid }
+        requested_model: { type: string }
+        final_model: { type: [string, 'null'] }
+        outcome: { type: string, enum: [allow, redirect, deny, none], description: none — отчёт без решения }
+        code: { oneOf: [{ $ref: '#/components/schemas/DenyCode' }, { type: 'null' }] }
+        reserve_rub: { $ref: '#/components/schemas/Money' }
+        fact_rub: { oneOf: [{ $ref: '#/components/schemas/Money' }, { type: 'null' }] }
+        tokens: { oneOf: [{ $ref: '#/components/schemas/TokenCounts' }, { type: 'null' }] }
+        status: { type: string, enum: [open, settled, expired, closed] }
+        flags: { type: array, items: { $ref: '#/components/schemas/EventFlag' } }
+        expense_date: { type: string, format: date }
+
+    AuditEntry:
+      type: object
+      required: [id, at, actor, action, object_type]
+      properties:
+        id: { type: integer }
+        at: { type: string, format: date-time }
+        actor: { type: string, description: 'Логин админки или caller:<id>' }
+        action: { type: string, examples: [create, update, delete, revoke, login, forbidden_access, reveal_pseudonym] }
+        object_type: { type: string }
+        object_id: { type: [string, 'null'] }
+        before: { type: [object, 'null'] }
+        after: { type: [object, 'null'] }
+
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, degraded, fail] }
+        db: { type: string, enum: [ok, fail] }
+        version: { type: string }
+        migrations: { type: string }
