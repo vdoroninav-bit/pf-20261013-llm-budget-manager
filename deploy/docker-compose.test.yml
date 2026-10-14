@@ -1,0 +1,40 @@
+# Тестовый стенд: чистый PostgreSQL в памяти + прогон тестов. Запуск: make test-docker
+# Изолированная сеть без выхода наружу; данные БД — tmpfs, после прогона удаляются (down -v).
+name: bm-test
+
+services:
+  postgres-test:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: bm_test
+      POSTGRES_USER: postgres
+      # Только для одноразового тестового контейнера во внутренней сети без публикации портов.
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off",
+              "-c", "timezone=UTC"]
+    tmpfs:
+      - /var/lib/postgresql
+    networks: [test]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bm_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  tests:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: tests
+    environment:
+      DATABASE_URL: postgresql://postgres@postgres-test:5432/bm_test
+      SKIP_FRONTEND: "1"   # Node в образе тестов появится в T087
+      PYTEST_ARGS: ${PYTEST_ARGS:-}
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    networks: [test]
+
+networks:
+  test:
+    internal: true

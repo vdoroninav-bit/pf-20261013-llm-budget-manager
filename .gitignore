@@ -2,3 +2,14 @@
 *.key
 __pycache__/
 .DS_Store
+
+# окружения и кэши
+.venv/
+node_modules/
+.pytest_cache/
+.ruff_cache/
+.import_linter_cache/
+dist/
+
+# артефакты make check (SBOM, отчёты) — публикуются CI как артефакты, в git не хранятся
+deploy/ci/out/

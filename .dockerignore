@@ -1,0 +1,18 @@
+# Контекст сборки — корень репозитория. В образ попадает только нужное (белый список).
+*
+!app/
+!tests/
+!deploy/
+!pytest.ini
+!12_openapi.yaml
+
+**/.venv
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/dist
+deploy/ci/out
+deploy/.env
+**/*.env
+!deploy/.env.example

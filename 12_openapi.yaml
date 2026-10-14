@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LLM Budget Manager API
-  version: 1.0.0
+  version: 1.0.1
   summary: Решения allow/deny/redirect, учёт расхода и бюджеты LLM в рублях.
   description: |
     Контракт v1 — источник истины для backend и frontend (`10_constitution.md`, «Процесс»).
@@ -20,6 +20,13 @@ info:
     MCP (FR-033, P3): Streamable HTTP на `/mcp`, тот же заголовок `X-Api-Key`. Инструменты — см. `x-mcp-tools`.
     Результат инструмента — `structuredContent` с той же схемой, что у HTTP. Отказ — `isError=false`, `outcome=deny`.
     Без ключа или с отозванным ключом — ошибка MCP с кодом `unauthorized`.
+
+    Изменения 1.0.1 (решения техлида по вопросам дизайна, `13_design_rulings.md`):
+    - `getImportStatus` доступна budget_owner (FR-027, отставание импорта на панели); для этой роли `unallocated_sources=[]`, `last_error_class=null`.
+    - `importOrg`: файл не больше 10 МиБ, иначе `413 file_too_large`.
+    - `updateAdminUser`: нельзя оставить систему без активного администратора, `409 last_admin`.
+    - `ImportErrorClass` — закрытый перечень классов ошибок импорта.
+    - Уточнено описание `Model.active` (выключенная модель → `deny model_unknown`, 12_arch_decision.md §4.5 п. 2).
   license:
     name: Proprietary (исключительные права заказчика)
 x-mcp-tools:
@@ -277,6 +284,7 @@ paths:
       description: |
         CSV UTF-8, разделитель `;`, заголовок `login;display_name;group;is_primary` (is_primary — 1/0 или пусто).
         Строки с ошибками не применяются, остальные применяются. Сотрудник, которого нет в файле, выводится из подразделения.
+        Размер файла — не больше 10 МиБ (10 485 760 байт); отдельного лимита строк нет. Больше — 413 file_too_large, ничего не применяется.
       security: [{ session: [], csrf: [] }]
       x-roles: [admin]
       requestBody:
@@ -297,6 +305,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/OrgImportSummary' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '413':
+          description: Файл больше 10 МиБ (code=file_too_large)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   # ---------------------------------------------------------------- departments
@@ -1075,6 +1088,11 @@ paths:
               schema: { $ref: '#/components/schemas/AdminUser' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Изменение оставило бы систему без активного администратора — смена роли с admin или active=false у последнего активного admin (code=last_admin); ничего не меняется
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/Problem' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   # ---------------------------------------------------------------- imports
@@ -1083,8 +1101,11 @@ paths:
       tags: [imports]
       operationId: getImportStatus
       summary: Включён ли импорт, ключ задан/не задан, последняя успешная загрузка, отставание (FR-025)
+      description: |
+        Статус общий для утилиты, данных подразделений в нём нет.
+        Для budget_owner (FR-027 — отставание импорта на панели) ответ сокращён: `unallocated_sources` — всегда пустой массив, `last_error_class` — всегда null.
       security: [{ session: [] }]
-      x-roles: [admin, finance_viewer]
+      x-roles: [admin, budget_owner, finance_viewer]
       responses:
         '200':
           description: Статус
@@ -1531,7 +1552,7 @@ components:
         code:
           type: string
           description: Машинный код на английском
-          examples: [validation_error, unauthorized, forbidden, subject_out_of_scope, decision_not_found, fx_rate_missing, unsupported_source_kind, source_exists, import_disabled, provider_key_missing, batch_too_large, login_locked, invalid_credentials, not_found, conflict]
+          examples: [validation_error, unauthorized, forbidden, subject_out_of_scope, decision_not_found, fx_rate_missing, unsupported_source_kind, source_exists, import_disabled, provider_key_missing, batch_too_large, login_locked, invalid_credentials, not_found, conflict, file_too_large, last_admin]
         detail: { type: string, description: Сообщение на русском }
         errors:
           type: array
@@ -1921,7 +1942,7 @@ components:
         default_input_tokens: { type: integer, minimum: 0 }
         default_output_tokens: { type: integer, minimum: 0 }
         tie_order: { type: integer, description: Порядок при равной цене (по возрастанию) }
-        active: { type: boolean }
+        active: { type: boolean, description: 'false — модель выключена: новые решения по ней — deny model_unknown, в кандидаты перенаправления не входит (12_arch_decision.md §4.5 п. 2, п. 7); открытые резервы закрываются по отчёту или по сроку' }
         current_price: { $ref: '#/components/schemas/ModelPrice' }
     ModelCreate:
       type: object
@@ -2123,6 +2144,15 @@ components:
         name: { type: string, minLength: 1, maxLength: 200 }
         provider_source_id: { type: [string, 'null'], format: uuid }
 
+    ImportErrorClass:
+      type: string
+      enum: [auth_rejected, provider_unavailable, bad_response, internal]
+      description: |
+        Класс ошибки загрузки (FR-025, сценарий 5.5). Закрытый перечень; новые значения — только через изменение контракта.
+        auth_rejected — провайдер отклонил ключ администратора (HTTP 401/403 от провайдера).
+        provider_unavailable — сеть, таймаут, HTTP 429 или 5xx провайдера; загрузка повторится по расписанию.
+        bad_response — ответ провайдера не разобран (изменился формат).
+        internal — прочая ошибка утилиты при обработке; подробности — в журнале контейнера worker.
     ImportStatus:
       type: object
       required: [enabled, providers]
@@ -2140,8 +2170,8 @@ components:
               last_run_at: { type: [string, 'null'], format: date-time }
               lag_hours: { type: [integer, 'null'] }
               consecutive_failures: { type: integer }
-              last_error_class: { type: [string, 'null'] }
-              unallocated_sources: { type: array, items: { type: string } }
+              last_error_class: { oneOf: [{ $ref: '#/components/schemas/ImportErrorClass' }, { type: 'null' }], description: Для budget_owner всегда null }
+              unallocated_sources: { type: array, items: { type: string }, description: Для budget_owner всегда пустой массив }
     ImportRun:
       type: object
       required: [id, provider, status]
@@ -2157,7 +2187,7 @@ components:
         lines_reconcile: { type: integer }
         lines_unallocated: { type: integer }
         lines_changed: { type: integer }
-        error_class: { type: [string, 'null'] }
+        error_class: { oneOf: [{ $ref: '#/components/schemas/ImportErrorClass' }, { type: 'null' }] }
     ImportRunRequest:
       type: object
       additionalProperties: false
