@@ -1,0 +1,47 @@
+{
+  "name": "bm-admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Админка LLM Budget Manager (react-admin MIT-ядро, Vite, TypeScript)",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": "^22.12.0 || ^24.0.0"
+  },
+  "scripts": {
+    "gen:api": "openapi-typescript ../../12_openapi.yaml -o src/api/schema.d.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.json --noEmit && vite build && node scripts/check-dist.mjs",
+    "dev": "vite",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@emotion/react": "11.14.0",
+    "@emotion/styled": "11.14.1",
+    "@mui/icons-material": "9.5.0",
+    "@mui/material": "9.5.0",
+    "ra-core": "5.15.4",
+    "ra-i18n-polyglot": "5.15.4",
+    "react": "19.3.0",
+    "react-admin": "5.15.4",
+    "react-dom": "19.3.0",
+    "react-router": "7.18.4",
+    "react-router-dom": "7.18.4"
+  },
+  "devDependencies": {
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "jsdom": "29.1.1",
+    "openapi-typescript": "7.13.0",
+    "ra-language-english": "5.15.4",
+    "typescript": "5.9.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.4",
+    "yaml": "2.9.1"
+  }
+}
