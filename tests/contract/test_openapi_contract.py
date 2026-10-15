@@ -16,38 +16,6 @@ from tests.contract.helpers import assert_matches_contract, contract, operations
 
 # Операции, которые ещё не реализованы (задача, которая их закрывает).
 PENDING: dict[str, str] = {
-    # T021, T031 — вызывающие системы
-    "createDecision": "T021",
-    "getIntegrationConfig": "T021",
-    "reportUsage": "T031",
-    "reportUsageBatch": "T031",
-    "getCallerBalance": "T031",
-    # T041, T042 — настройка
-    "importOrg": "T041",
-    "listDepartments": "T042",
-    "createDepartment": "T042",
-    "getDepartment": "T042",
-    "updateDepartment": "T042",
-    "putDepartmentLimits": "T042",
-    "listEmployees": "T042",
-    "getEmployee": "T042",
-    "putEmployeeLimits": "T042",
-    "revealPseudonym": "T042",
-    "listModels": "T042",
-    "createModel": "T042",
-    "getModel": "T042",
-    "updateModel": "T042",
-    "listModelPrices": "T042",
-    "createModelPrice": "T042",
-    "listFxRates": "T042",
-    "putFxRate": "T042",
-    "listCallers": "T042",
-    "createCaller": "T042",
-    "updateCaller": "T042",
-    "revokeCaller": "T042",
-    "listAdminUsers": "T042",
-    "createAdminUser": "T042",
-    "updateAdminUser": "T042",
     # T051 — подписки
     "listSubscriptions": "T051",
     "createSubscription": "T051",

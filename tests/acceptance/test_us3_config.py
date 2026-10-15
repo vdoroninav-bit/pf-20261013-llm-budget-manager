@@ -9,8 +9,10 @@
 Сценарий 3.6 (model_unknown) — tests/acceptance/test_edge_cases.py::test_model_unknown (T020).
 
 Нумерация строк в сводке импорта: строка файла, заголовок — строка 1.
-Написаны до реализации (T041, T042): xfail(strict=True) на уровне модуля. Решения внутри тестов
-требуют и T021.
+Написаны до реализации (T041, T042). После T041/T042 пометка xfail снята с модуля и оставлена только
+у двух тестов (14_dev_backend.md, раздел «Backend 2»): `test_removed_employee_keeps_period_spend` ждёт
+`getDepartmentBalance` (T071), у `test_3_5_new_price_from_15th_old_events_unchanged` дефект теста — сессия
+админки (12 ч) истекает после `clock.set(15-е 10:00)`.
 """
 
 import hashlib
@@ -44,14 +46,7 @@ from tests.fixtures.qa import (
 )
 from tests.fixtures.seed import Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T041/T042: загрузка AD-файла и админ-CRUD ещё не реализованы",
-    ),
-]
+pytestmark = pytest.mark.db
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 AD_OK = (FIXTURES / "ad_groups_ok.csv").read_bytes()
@@ -198,6 +193,11 @@ async def test_import_file_too_large_is_413(
     assert await db.fetchval("SELECT count(*) FROM department") == 0
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="T071: getDepartmentBalance (/departments/{id}/balance) ещё не реализована",
+)
 async def test_removed_employee_keeps_period_spend(
     client: httpx.AsyncClient, admin: dict[str, str], db: asyncpg.Connection, seed: Seed
 ) -> None:
@@ -363,6 +363,11 @@ async def test_3_4_model_added_and_assignable(
     assert d["outcome"] == "allow" and d["reserve_rub"] == "30.00"
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=KeyError,
+    reason="дефект теста (QA): после clock.set(15-е 10:00) сессия админки старше 12 ч → 401 на listModelPrices",
+)
 async def test_3_5_new_price_from_15th_old_events_unchanged(
     client: httpx.AsyncClient, admin: dict[str, str], seed: Seed, db: asyncpg.Connection, clock: FrozenClock
 ) -> None:

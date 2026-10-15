@@ -1,4 +1,4 @@
-// Карта ресурсов react-admin → операции 12_openapi.yaml (v1.0.1).
+// Карта ресурсов react-admin → операции 12_openapi.yaml (v1.0.2).
 // Каждая строка сверяется с контрактом тестом resources.contract.test.ts: флаги и фильтры должны
 // совпадать с объявленными операциями и параметрами ровно, без «лишних» и «забытых».
 // Операции вне CRUD (лимиты PUT, revoke, preview, runImport, курсы PUT, отчёты) — в задачах экранов.
@@ -84,7 +84,8 @@ export const RESOURCES = {
     create: true,
     update: true,
   }),
-  adminUsers: r({
+  // Имя ресурса = маршрут экрана (design/screens.md §10: /admin/#/admin-users).
+  'admin-users': r({
     path: 'admin-users',
     list: { paginated: false, sortable: false, filters: [] },
     create: true,

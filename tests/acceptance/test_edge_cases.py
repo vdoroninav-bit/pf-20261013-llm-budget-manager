@@ -4,7 +4,7 @@ subject_unknown, model_unknown, модель удалена из разрешё�
 остаток, подписки ≥ 100%, subject_out_of_scope → 403 + аудит, http_status_hint для каждого кода,
 отказ без ключа и лишние поля (принцип I).
 
-Написаны до реализации (T021): xfail(strict=True) на уровне модуля, падают на 404.
+Написаны до реализации; пометка xfail модуля снята в T021.
 Тест подписок дополнительно помечен T051 — амортизация в decide делается там.
 """
 
@@ -29,14 +29,7 @@ from tests.fixtures.qa import (
 )
 from tests.fixtures.seed import Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T021: Budget.decide и POST /api/v1/decisions ещё не реализованы",
-    ),
-]
+pytestmark = pytest.mark.db
 
 
 async def _base(

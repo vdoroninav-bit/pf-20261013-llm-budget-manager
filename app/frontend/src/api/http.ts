@@ -70,8 +70,11 @@ export function createHttpClient({ fetch, session, baseUrl = '/api/v1' }: HttpCl
   return {
     async request<T>(method: HttpMethod, path: string, options: RequestOptions = {}) {
       const headers: Record<string, string> = { Accept: 'application/json' };
-      let body: string | undefined;
-      if (options.body !== undefined) {
+      let body: string | FormData | undefined;
+      if (options.body instanceof FormData) {
+        // multipart/form-data: границу частей выставляет сам fetch, Content-Type не задаём.
+        body = options.body;
+      } else if (options.body !== undefined) {
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify(options.body);
       }

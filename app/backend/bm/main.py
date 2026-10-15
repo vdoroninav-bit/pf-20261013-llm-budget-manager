@@ -8,16 +8,31 @@ Swagger UI и /openapi.json не публикуются: UI тянет скри�
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 
 from fastapi import FastAPI
 
 from bm import __version__
 from bm.access.auth import ensure_initial_admin
+from bm.budget.service import Budget
 from bm.clock import Clock, SystemClock
 from bm.db.migrate import migrate
 from bm.db.pool import create_pool
+from bm.http import admin_errors
 from bm.http.errors import install_error_handlers
-from bm.http.routers import auth, notifications, system
+from bm.http.routers import (
+    admin_users,
+    auth,
+    caller,
+    callers,
+    departments,
+    employees,
+    fx,
+    models,
+    notifications,
+    org,
+    system,
+)
 from bm.settings import Settings
 
 log = logging.getLogger("bm")
@@ -38,6 +53,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 now=app.state.clock.now(),
             )
         app.state.pool = pool
+        app.state.budget = Budget(
+            pool,
+            app.state.clock,
+            reservation_ttl=timedelta(minutes=settings.reservation_ttl_min),
+            timeout_ms=settings.decision_timeout_ms,
+            default_fail_mode=settings.default_fail_mode,
+        )
+        await app.state.budget.ensure_partitions()
         yield
     finally:
         await pool.close()
@@ -58,5 +81,10 @@ def create_app(settings: Settings | None = None, *, clock: Clock | None = None) 
     install_error_handlers(app)
     app.include_router(system.router)
     app.include_router(auth.router, prefix="/api/v1")
+    app.include_router(caller.router, prefix="/api/v1")
     app.include_router(notifications.router, prefix="/api/v1")
+    # Админ-CRUD и загрузка AD (T041, T042)
+    admin_errors.install(app)
+    for admin_router in (org, departments, employees, models, fx, callers, admin_users):
+        app.include_router(admin_router.router, prefix="/api/v1")
     return app

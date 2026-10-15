@@ -29,7 +29,7 @@ const itemPath = (path: string): string | undefined =>
 
 describe('карта ресурсов совпадает с 12_openapi.yaml', () => {
   it('контракт той версии, из которой сгенерирован schema.d.ts', () => {
-    expect(spec.info.version).toBe('1.0.1');
+    expect(spec.info.version).toBe('1.0.2');
   });
 
   for (const [name, cfg] of Object.entries(RESOURCES)) {

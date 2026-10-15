@@ -1,5 +1,5 @@
 """Зависимости FastAPI: соединение с БД, часы, настройки, сессия админки и проверка прав.
-Аутентификация вызывающих систем по `X-Api-Key` — T021.
+Аутентификация вызывающих систем — по `X-Api-Key` (`CallerDep`).
 
 Права проверяются по `operationId` маршрута (`PERMISSIONS`), поэтому роутеру достаточно объявить
 параметр `session: AdminSession` — таблица прав одна, и разойтись с контрактом негде.
@@ -16,6 +16,8 @@ from bm.access import audit
 from bm.access.auth import Session, resolve_session
 from bm.access.authorize import Forbidden, Scope, authorize
 from bm.access.permissions import ALLOWED_BEFORE_PASSWORD_CHANGE
+from bm.budget.errors import BudgetError
+from bm.budget.service import Budget, CallerCtx
 from bm.clock import Clock
 from bm.http.errors import ProblemError, forbidden, unauthorized
 from bm.settings import Settings
@@ -108,3 +110,30 @@ async def authorize_object(
     except Forbidden as exc:
         await audit_forbidden(conn, session, request, exc)
         raise forbidden("Объект другого подразделения недоступен.") from exc
+
+
+# ---------------------------------------------------------------- вызывающие системы (T021)
+
+API_KEY_HEADER = "X-Api-Key"
+
+
+def get_budget(request: Request) -> Budget:
+    budget: Budget = request.app.state.budget
+    return budget
+
+
+def budget_problem(exc: BudgetError) -> ProblemError:
+    """Ошибка модуля `budget` → Problem (`code` контракта, `detail` на русском)."""
+    return ProblemError(exc.status, exc.code, exc.detail)
+
+
+async def caller_ctx(request: Request) -> CallerCtx:
+    """Аутентификация по `X-Api-Key`: SHA-256 → снимок конфигурации; нет или отозван — 401."""
+    try:
+        return await get_budget(request).authenticate(request.headers.get(API_KEY_HEADER))
+    except BudgetError as exc:
+        raise budget_problem(exc) from exc
+
+
+BudgetDep = Annotated[Budget, Depends(get_budget)]
+CallerDep = Annotated[CallerCtx, Depends(caller_ctx)]

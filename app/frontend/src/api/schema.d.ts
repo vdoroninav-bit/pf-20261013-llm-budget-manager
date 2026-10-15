@@ -903,6 +903,7 @@ export interface components {
              * @example validation_error
              * @example unauthorized
              * @example forbidden
+             * @example password_change_required
              * @example subject_out_of_scope
              * @example decision_not_found
              * @example fx_rate_missing
@@ -1605,7 +1606,7 @@ export interface components {
         };
     };
     responses: {
-        /** @description Нет ключа/сессии, ключ отозван (code=unauthorized) */
+        /** @description Нет ключа или сессии, сессия истекла или закрыта, ключ отозван (code=unauthorized) */
         Unauthorized: {
             headers: {
                 [name: string]: unknown;
@@ -1614,7 +1615,12 @@ export interface components {
                 "application/problem+json": components["schemas"]["Problem"];
             };
         };
-        /** @description Роль не позволяет или чужое подразделение (code=forbidden); попытка пишется в аудит */
+        /**
+         * @description Доступ запрещён. Причины и коды:
+         *     - роль не позволяет операцию или объект чужого подразделения (code=forbidden); попытка пишется в аудит (forbidden_access);
+         *     - нет или неверный заголовок X-CSRF-Token на изменяющем запросе (code=forbidden);
+         *     - не сменён временный пароль — до смены доступны только me, logout, changePassword (code=password_change_required).
+         */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -1915,6 +1921,8 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     me: {
@@ -1959,6 +1967,7 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
         };
     };
@@ -1988,6 +1997,7 @@ export interface operations {
                     "application/json": components["schemas"]["OrgImportSummary"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             /** @description Файл больше 10 МиБ (code=file_too_large) */
             413: {
@@ -2028,6 +2038,8 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     createDepartment: {
@@ -2052,6 +2064,7 @@ export interface operations {
                     "application/json": components["schemas"]["Department"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
@@ -2077,6 +2090,7 @@ export interface operations {
                     "application/json": components["schemas"]["Department"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2105,6 +2119,7 @@ export interface operations {
                     "application/json": components["schemas"]["Department"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
@@ -2134,6 +2149,7 @@ export interface operations {
                     "application/json": components["schemas"]["LimitSet"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
@@ -2162,6 +2178,7 @@ export interface operations {
                     "application/json": components["schemas"]["BalanceReport"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2195,6 +2212,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -2223,6 +2241,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -2246,6 +2265,7 @@ export interface operations {
                     "application/json": components["schemas"]["Employee"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2274,6 +2294,7 @@ export interface operations {
                     "application/json": components["schemas"]["LimitSet"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
@@ -2299,6 +2320,7 @@ export interface operations {
                     "application/json": components["schemas"]["EmployeeIdentity"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2329,6 +2351,8 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     createModel: {
@@ -2353,6 +2377,7 @@ export interface operations {
                     "application/json": components["schemas"]["Model"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             /** @description Ошибка валидации или USD-цена без единого курса (code=fx_rate_missing) */
@@ -2387,6 +2412,8 @@ export interface operations {
                     "application/json": components["schemas"]["Model"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -2415,6 +2442,7 @@ export interface operations {
                     "application/json": components["schemas"]["Model"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
@@ -2444,6 +2472,8 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     createModelPrice: {
@@ -2471,6 +2501,7 @@ export interface operations {
                     "application/json": components["schemas"]["ModelPrice"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             /** @description Ошибка валидации, valid_from в прошлом или USD без курса (fx_rate_missing) */
             422: {
@@ -2504,6 +2535,8 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     putFxRate: {
@@ -2530,6 +2563,7 @@ export interface operations {
                     "application/json": components["schemas"]["FxRate"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
         };
@@ -2560,6 +2594,8 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     createSubscription: {
@@ -2584,6 +2620,7 @@ export interface operations {
                     "application/json": components["schemas"]["Subscription"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             /** @description Ошибка валидации или USD без единого курса (fx_rate_missing) */
             422: {
@@ -2618,6 +2655,8 @@ export interface operations {
                     "application/json": components["schemas"]["SubscriptionPreview"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
         };
     };
@@ -2641,6 +2680,7 @@ export interface operations {
                     "application/json": components["schemas"]["Subscription"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2663,6 +2703,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2691,6 +2732,7 @@ export interface operations {
                     "application/json": components["schemas"]["Subscription"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
@@ -2717,6 +2759,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -2742,6 +2785,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProviderSource"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             /** @description Источник (provider, ref) уже есть — ровно один способ учёта (code=source_exists) */
             409: {
@@ -2781,6 +2825,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2809,6 +2854,7 @@ export interface operations {
                     "application/json": components["schemas"]["ProviderSource"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             422: components["responses"]["ValidationError"];
@@ -2835,6 +2881,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -2860,6 +2907,7 @@ export interface operations {
                     "application/json": components["schemas"]["CallerCreated"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             422: components["responses"]["ValidationError"];
         };
@@ -2888,6 +2936,7 @@ export interface operations {
                     "application/json": components["schemas"]["Caller"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2912,6 +2961,7 @@ export interface operations {
                     "application/json": components["schemas"]["Caller"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -2937,6 +2987,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -2962,6 +3013,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminUser"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["ValidationError"];
@@ -2991,6 +3043,7 @@ export interface operations {
                     "application/json": components["schemas"]["AdminUser"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             /** @description Изменение оставило бы систему без активного администратора — смена роли с admin или active=false у последнего активного admin (code=last_admin); ничего не меняется */
@@ -3023,6 +3076,8 @@ export interface operations {
                     "application/json": components["schemas"]["ImportStatus"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     listImportRuns: {
@@ -3050,6 +3105,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -3075,6 +3131,7 @@ export interface operations {
                     "application/json": components["schemas"]["ImportRun"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             /** @description Импорт выключен флагом (code=import_disabled) или ключ не задан (code=provider_key_missing) */
             409: {
@@ -3115,6 +3172,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -3141,6 +3199,7 @@ export interface operations {
                     "text/csv": string;
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -3166,6 +3225,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -3194,6 +3254,8 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     markNotificationRead: {
@@ -3214,6 +3276,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
@@ -3249,6 +3312,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };
@@ -3280,6 +3344,7 @@ export interface operations {
                     };
                 };
             };
+            401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };
     };

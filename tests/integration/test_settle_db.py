@@ -5,7 +5,7 @@
 - факт пишется в ledger_daily сотрудника и подразделения в одной транзакции с закрытием резерва;
 - идемпотентность через report_key (caller_id, report_id).
 
-Написано до реализации (T031): xfail(strict=True) на уровне модуля.
+Написано до реализации; пометка xfail модуля снята в T031.
 """
 
 from datetime import date, timedelta
@@ -31,14 +31,7 @@ from tests.fixtures.qa import (
 )
 from tests.fixtures.seed import Emp, Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T031: settle и баланс ещё не реализованы",
-    ),
-]
+pytestmark = pytest.mark.db
 
 
 async def _world(seed: Seed) -> tuple[UUID, Emp, UUID, str]:

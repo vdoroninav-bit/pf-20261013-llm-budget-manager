@@ -127,6 +127,7 @@ async def test_finance_viewer_forbidden_and_audited(
     await _login(client, "fin")
     resp = await client.get("/api/v1/notifications")
     assert resp.status_code == 403
+    assert_matches_contract(resp, "listNotifications")
     n = await db.fetchval(
         "SELECT count(*) FROM audit_log WHERE action = 'forbidden_access' AND actor = 'fin' "
         "AND object_id = 'listNotifications'"
@@ -190,3 +191,4 @@ async def test_mark_read_requires_csrf(client: httpx.AsyncClient, world: dict[st
     await _login(client, "boss")
     resp = await client.post(f"/api/v1/notifications/{world['ids']['Маркетинг']}/read")
     assert resp.status_code == 403
+    assert_matches_contract(resp, "markNotificationRead")

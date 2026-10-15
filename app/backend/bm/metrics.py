@@ -1,10 +1,25 @@
 """Метрики Prometheus (контракт, операция `metrics`). Только счётчики и длительности — без содержимого и ПДн.
 
-Метрики процесса: при нескольких воркерах uvicorn каждый отдаёт свои значения
-(multiprocess-режим — T086/T087).
+Несколько воркеров uvicorn (14_tech_rulings.md, Б6): если задан `PROMETHEUS_MULTIPROC_DIR`, каждый процесс
+пишет значения в файлы этого каталога, а `/metrics` собирает их всех (`MultiProcessCollector`): счётчики
+и гистограммы суммируются, у gauge режим агрегации задан явно (`mostrecent` — последнее записанное значение).
+Каталог очищается при старте контейнера (tmpfs, T087). Без переменной — метрики одного процесса.
 """
 
-from prometheus_client import CONTENT_TYPE_PLAIN_0_0_4, REGISTRY, Counter, Gauge, Histogram, generate_latest
+import os
+
+from prometheus_client import (
+    CONTENT_TYPE_PLAIN_0_0_4,
+    REGISTRY,
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+    multiprocess,
+)
+
+MULTIPROC_ENV = "PROMETHEUS_MULTIPROC_DIR"
 
 CONTENT_TYPE = CONTENT_TYPE_PLAIN_0_0_4
 
@@ -15,8 +30,14 @@ DECISION_LATENCY = Histogram(
 )
 DECISIONS = Counter("decisions_total", "Решения по исходу и коду", ["outcome", "code"])
 REPORTS = Counter("reports_total", "Отчёты о расходе по статусу обработки", ["status"])
-RESERVATIONS_OPEN = Gauge("reservations_open", "Открытые резервы (по данным последнего прохода worker)")
-IMPORT_LAG_HOURS = Gauge("import_lag_hours", "Отставание импорта провайдера, часов", ["provider"])
+RESERVATIONS_OPEN = Gauge(
+    "reservations_open",
+    "Открытые резервы (по данным последнего прохода worker)",
+    multiprocess_mode="mostrecent",
+)
+IMPORT_LAG_HOURS = Gauge(
+    "import_lag_hours", "Отставание импорта провайдера, часов", ["provider"], multiprocess_mode="mostrecent"
+)
 JOB_FAILURES = Counter("job_failures_total", "Сбои фоновых задач", ["job"])
 
 # Нулевые ряды, чтобы метрики с метками были видны в /metrics до первого события.
@@ -25,4 +46,8 @@ for _provider in ("anthropic", "openai"):
 
 
 def render() -> bytes:
+    if os.environ.get(MULTIPROC_ENV):
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        return generate_latest(registry)
     return generate_latest(REGISTRY)

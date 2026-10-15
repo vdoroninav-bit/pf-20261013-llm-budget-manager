@@ -3,8 +3,7 @@
 Все решения идут через `POST /api/v1/decisions`, каждый ответ проверяется `assert_matches_contract`.
 Алгоритм — 12_arch_decision.md §4.5. Суммы — по каталогу tests/fixtures/qa.py (A = 30 ₽, C = 5 ₽, Z = 0 ₽).
 
-Тесты написаны до реализации (T021) и помечены xfail(strict=True): пока роутера нет, они падают на 404.
-Реализатор снимает пометку модуля, когда тесты проходят (иначе strict-XPASS роняет `make test`).
+Тесты написаны до реализации; пометка xfail модуля снята в T021 (реализация готова).
 """
 
 from dataclasses import dataclass
@@ -28,14 +27,7 @@ from tests.fixtures.qa import (
 )
 from tests.fixtures.seed import Emp, Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T021: Budget.decide и POST /api/v1/decisions ещё не реализованы",
-    ),
-]
+pytestmark = pytest.mark.db
 
 TODAY_MINUS_1 = msk(2026, 10, 13).date()  # вторник той же недели
 

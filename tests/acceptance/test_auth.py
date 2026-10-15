@@ -92,7 +92,9 @@ async def test_session_expires(client: httpx.AsyncClient, seed: Seed, clock: Fro
     await seed.admin_user("anna", PASSWORD)
     await _logged_in(client, "anna")
     clock.advance(hours=13)
-    assert (await client.get("/api/v1/auth/me")).status_code == 401
+    resp = await client.get("/api/v1/auth/me")
+    assert resp.status_code == 401
+    assert_matches_contract(resp, "me")
 
 
 @pytest.mark.parametrize("login, password", [("anna", "wrong-password"), ("nobody", PASSWORD)])
@@ -107,7 +109,9 @@ async def test_invalid_credentials(client: httpx.AsyncClient, seed: Seed, login:
 
 async def test_inactive_user_cannot_log_in(client: httpx.AsyncClient, seed: Seed) -> None:
     await seed.admin_user("anna", PASSWORD, active=False)
-    assert (await _login(client, "anna")).status_code == 401
+    resp = await _login(client, "anna")
+    assert resp.status_code == 401
+    assert_matches_contract(resp, "login")
 
 
 async def test_login_extra_fields_rejected(client: httpx.AsyncClient) -> None:
@@ -153,12 +157,16 @@ async def test_logout_requires_csrf(client: httpx.AsyncClient, seed: Seed) -> No
     csrf = await _logged_in(client, "anna")
     resp = await client.post("/api/v1/auth/logout")
     assert resp.status_code == 403
+    assert_matches_contract(resp, "logout")
     resp = await client.post("/api/v1/auth/logout", headers={"X-CSRF-Token": "forged"})
     assert resp.status_code == 403
+    assert_matches_contract(resp, "logout")
     resp = await client.post("/api/v1/auth/logout", headers={"X-CSRF-Token": csrf})
     assert resp.status_code == 204
     assert_matches_contract(resp, "logout")
-    assert (await client.get("/api/v1/auth/me")).status_code == 401
+    resp = await client.get("/api/v1/auth/me")
+    assert resp.status_code == 401
+    assert_matches_contract(resp, "me")
 
 
 # ---------------------------------------------------------------- смена пароля
@@ -176,6 +184,7 @@ async def test_change_password(client: httpx.AsyncClient, seed: Seed, db: asyncp
     assert_matches_contract(resp, "changePassword")
     resp = await client.post(url, json={"old_password": PASSWORD, "new_password": "short"}, headers=hdr)
     assert resp.status_code == 422
+    assert_matches_contract(resp, "changePassword")
     resp = await client.post(
         url, json={"old_password": PASSWORD, "new_password": "new-password-123"}, headers=hdr
     )
@@ -184,7 +193,9 @@ async def test_change_password(client: httpx.AsyncClient, seed: Seed, db: asyncp
     assert await db.fetchval("SELECT must_change_password FROM admin_user WHERE login = 'anna'") is False
     assert (await client.get("/api/v1/auth/me")).status_code == 200  # текущая сессия жива
     async with httpx.AsyncClient(transport=client._transport, base_url=str(client.base_url)) as other:
-        assert (await _login(other, "anna")).status_code == 401
+        resp = await _login(other, "anna")
+        assert resp.status_code == 401
+        assert_matches_contract(resp, "login")
         assert (await _login(other, "anna", "new-password-123")).status_code == 200
     n = await db.fetchval(
         "SELECT count(*) FROM audit_log WHERE action = 'change_password' AND actor = 'anna'"
@@ -203,7 +214,9 @@ async def test_change_password_closes_other_sessions(client: httpx.AsyncClient, 
             headers={"X-CSRF-Token": csrf},
         )
         assert resp.status_code == 204
-        assert (await other.get("/api/v1/auth/me")).status_code == 401
+        resp = await other.get("/api/v1/auth/me")
+        assert resp.status_code == 401
+        assert_matches_contract(resp, "me")
 
 
 # ---------------------------------------------------------------- роли и аудит отказов
@@ -259,3 +272,12 @@ async def test_must_change_password_blocks_other_operations(probe: httpx.AsyncCl
     resp = await probe.get("/__probe/audit")
     assert resp.status_code == 403 and resp.json()["code"] == "password_change_required"
     assert (await probe.get("/api/v1/auth/me")).status_code == 200
+
+
+async def test_must_change_password_on_real_admin_route(client: httpx.AsyncClient, seed: Seed) -> None:
+    """Контракт 1.0.2 (14_tech_rulings.md Б1): 403 password_change_required объявлен у операций админки."""
+    await seed.admin_user("boss", PASSWORD, role="admin", must_change_password=True)
+    await _logged_in(client, "boss")
+    resp = await client.get("/api/v1/departments")
+    assert resp.status_code == 403 and resp.json()["code"] == "password_change_required"
+    assert_matches_contract(resp, "listDepartments")

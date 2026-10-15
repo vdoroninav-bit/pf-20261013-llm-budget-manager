@@ -64,3 +64,11 @@ def test_session_secret_required(monkeypatch: pytest.MonkeyPatch) -> None:
     _env(monkeypatch, DATABASE_URL="postgresql://u@h/db_test", SESSION_SECRET="")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)  # type: ignore[call-arg]
+
+
+def test_session_cookie_secure_default_false_and_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """14_tech_rulings.md Б2: по умолчанию false (HTTP на 127.0.0.1), true — при HTTPS на обратном прокси."""
+    _env(monkeypatch, DATABASE_URL="postgresql://u@h/db_test", SESSION_SECRET="s" * 32)
+    assert Settings(_env_file=None).session_cookie_secure is False  # type: ignore[call-arg]
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    assert Settings(_env_file=None).session_cookie_secure is True  # type: ignore[call-arg]

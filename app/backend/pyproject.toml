@@ -13,6 +13,7 @@ dependencies = [
     "pydantic-settings==2.15.0",
     "httpx==0.28.1",            # только в bm.egress (import-linter)
     "argon2-cffi==25.1.0",
+    "python-multipart==0.0.32", # multipart/form-data для importOrg (FastAPI UploadFile), T041
     "prometheus-client==0.26.0",
     "tzdata==2026.5",           # Europe/Moscow без системной tzdata в slim-образе
 ]

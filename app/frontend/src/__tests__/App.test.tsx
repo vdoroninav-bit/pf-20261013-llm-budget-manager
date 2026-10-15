@@ -13,7 +13,7 @@ afterEach(() => {
 
 describe('каркас админки', () => {
   it('без сессии показывает русскую форму входа', async () => {
-    const ff = fakeFetch(problem(401, 'unauthorized'), problem(401, 'unauthorized'), problem(401, 'unauthorized'));
+    const ff = fakeFetch(...Array.from({ length: 10 }, () => problem(401, 'unauthorized')));
     render(<App fetch={ff.fetch} />);
     expect(await screen.findByRole('button', { name: 'Войти' })).toBeTruthy();
     expect(screen.getByLabelText(/Логин/)).toBeTruthy();
@@ -46,7 +46,7 @@ describe('каркас админки', () => {
     // ra-core шлёт телеметрию только в production-сборке — иначе тест прошёл бы и без disableTelemetry.
     vi.stubEnv('NODE_ENV', 'production');
     try {
-      const ff = fakeFetch(problem(401, 'unauthorized'), problem(401, 'unauthorized'), problem(401, 'unauthorized'));
+      const ff = fakeFetch(...Array.from({ length: 10 }, () => problem(401, 'unauthorized')));
       render(<App fetch={ff.fetch} />);
       await screen.findByRole('button', { name: 'Войти' });
       expect(loaded).toEqual([]);

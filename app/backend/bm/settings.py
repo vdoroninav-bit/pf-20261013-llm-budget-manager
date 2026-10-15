@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     admin_initial_login: str = "admin"
     admin_initial_password: SecretStr | None = None
     admin_initial_password_file: Path | None = None
+    # Флаг Secure у cookie bm_session (14_tech_rulings.md Б2): true — при HTTPS на обратном прокси заказчика.
+    session_cookie_secure: bool = False
 
     # Решения
     reservation_ttl_min: int = Field(default=15, ge=1)

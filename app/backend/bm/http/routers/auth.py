@@ -42,16 +42,18 @@ async def login(
         path="/",
         httponly=True,
         samesite="strict",
-        secure=False,  # по умолчанию API слушает 127.0.0.1 по HTTP; HTTPS — на обратном прокси заказчика
+        secure=settings.session_cookie_secure,  # по умолчанию false: API слушает 127.0.0.1 по HTTP
     )
     return _session_out(result.session)
 
 
 @router.post("/logout", operation_id="logout", status_code=204)
-async def logout(session: AdminSession, conn: Conn) -> Response:
+async def logout(session: AdminSession, conn: Conn, settings: SettingsDep) -> Response:
     await auth.logout(conn, session)
     response = Response(status_code=204)
-    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="strict")
+    response.delete_cookie(
+        SESSION_COOKIE, path="/", httponly=True, samesite="strict", secure=settings.session_cookie_secure
+    )
     return response
 
 

@@ -1,7 +1,7 @@
 // Корень админки: react-admin (MIT-ядро), русский словарь, тема из design/tokens.json.
 // Маршруты — hash (/admin/#/...), поэтому бэкенду достаточно отдавать index.html и ассеты из /admin/.
 import { useMemo } from 'react';
-import { Admin, CustomRoutes } from 'react-admin';
+import { Admin, CustomRoutes, Resource } from 'react-admin';
 import { Route } from 'react-router-dom';
 import { createAuthProvider, PASSWORD_ROUTE } from './authProvider';
 import { createDataProvider } from './dataProvider';
@@ -13,6 +13,14 @@ import { BmLayout } from './layout/BmLayout';
 import { Dashboard } from './pages/Dashboard';
 import { LoginPage } from './pages/LoginPage';
 import { PasswordPage } from './pages/PasswordPage';
+import { OrgImportPage } from './pages/OrgImport';
+import { can } from './access/permissions';
+import type { Role } from './api/types';
+import { DepartmentCreate, DepartmentEdit, DepartmentList, DepartmentShow } from './resources/departments';
+import { EmployeeCard } from './resources/employees';
+import { ModelCreate, ModelEdit, ModelList, ModelShow } from './resources/models';
+import { CallerCreate, CallerEdit, CallerList } from './resources/callers';
+import { AdminUserCreate, AdminUserEdit, AdminUserList } from './resources/adminUsers';
 import { darkTheme, lightTheme } from './theme/muiTheme';
 import { createThemeStore } from './theme/themeStore';
 
@@ -55,11 +63,54 @@ export function App({ fetch = (input, init) => window.fetch(input, init) }: AppP
       requireAuth
       disableTelemetry
     >
-      {/* Без <Resource>/<CustomRoutes> ra-core считает админку пустой и вместо входа и панели
-          рисует заглушку «Welcome to React-admin». Ресурсы меню добавляются в T043/T052/T064/T072. */}
       <CustomRoutes>
         <Route path={PASSWORD_ROUTE} element={<PasswordPage />} />
+        <Route path="/org-import" element={<OrgImportPage />} />
       </CustomRoutes>
+      {(role: Role | null) => resourcesFor(role)}
     </Admin>
   );
+}
+
+/**
+ * Ресурсы по роли: экраны и действия — только те, что разрешены x-roles операций (access/permissions.ts).
+ * Названия ресурсов совпадают с картой api/resources.ts (dataProvider).
+ */
+function resourcesFor(role: Role | null) {
+  return [
+    <Resource
+      key="departments"
+      name="departments"
+      list={DepartmentList}
+      show={DepartmentShow}
+      edit={can(role, 'updateDepartment') ? DepartmentEdit : undefined}
+      create={can(role, 'createDepartment') ? DepartmentCreate : undefined}
+      recordRepresentation="name"
+    />,
+    can(role, 'getEmployee') ? (
+      <Resource key="employees" name="employees" show={EmployeeCard} edit={EmployeeCard} recordRepresentation="pseudonym" />
+    ) : null,
+    <Resource
+      key="models"
+      name="models"
+      list={ModelList}
+      show={ModelShow}
+      edit={can(role, 'updateModel') ? ModelEdit : undefined}
+      create={can(role, 'createModel') ? ModelCreate : undefined}
+    />,
+    can(role, 'listCallers') ? (
+      <Resource key="callers" name="callers" list={CallerList} create={CallerCreate} edit={CallerEdit} recordRepresentation="name" />
+    ) : null,
+    can(role, 'listProviderSources') ? <Resource key="providerSources" name="providerSources" /> : null,
+    can(role, 'listAdminUsers') ? (
+      <Resource
+        key="admin-users"
+        name="admin-users"
+        list={AdminUserList}
+        create={AdminUserCreate}
+        edit={AdminUserEdit}
+        recordRepresentation="login"
+      />
+    ) : null,
+  ];
 }

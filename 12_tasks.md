@@ -150,7 +150,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - `test_concurrency`: 3 пула × 50 одновременных запросов на границе лимита; Σ `reserve` ≤ остатка до теста, строго.
   - Готово: тесты собраны и FAIL (404 или ImportError).
   - Зависимости: T015, T014.
-- [ ] **T021 [US1] [backend] `Budget.decide` и роутеры вызывающей системы.**
+- [x] **T021 [US1] [backend] `Budget.decide` и роутеры вызывающей системы.**
   - Файлы: `bm/budget/{service.py, repo.py}`, `bm/http/deps.py` (аутентификация по `X-Api-Key`: SHA-256 → снимок, отозванный ключ → 401), `bm/http/schemas.py` (Pydantic 1:1 с контрактом, `extra="forbid"`), `bm/http/routers/caller.py` (`createDecision`, `getIntegrationConfig` с ETag), `tests/integration/test_decide_db.py`.
   - Транзакция: `ensure_fresh` → `SELECT … FROM budget_lock … ORDER BY owner_type, owner_id FOR UPDATE` → один `SUM … FILTER` по `ledger_daily` → `select()` → `INSERT call_record` → `UPDATE budget_lock`.
   - Готово: `pytest tests/acceptance/test_us1_decisions.py tests/acceptance/test_edge_cases.py tests/integration/test_concurrency.py` проходит, `make test` зелёный.
@@ -173,7 +173,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - `GET /api/v1/balance` совпадает с ручным пересчётом.
   - Готово: тесты FAIL.
   - Зависимости: T020.
-- [ ] **T031 [US2] [backend] `settle`, пакет, истечение резервов, баланс, worker.**
+- [x] **T031 [US2] [backend] `settle`, пакет, истечение резервов, баланс, worker.**
   - Файлы: `bm/budget/service.py` (`settle`, `balance`, `expire_reserves`), `bm/http/routers/caller.py` (`reportUsage`, `reportUsageBatch`, `getCallerBalance`), `bm/worker/{main.py, jobs.py}` (цикл задач, `pg_try_advisory_lock` на задачу, `job_run`; задача `expire_reserves` раз в 60 с), `bm/metrics.py`.
   - Правила:
     - 200 отдаётся только после COMMIT;
@@ -222,7 +222,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Формат: CSV `login;display_name;group;is_primary`, UTF-8. Псевдоним — `emp-` + 10 случайных hex, выдаётся один раз.
   - Готово: тесты 3.1, 3.2 и `test_removed_*` проходят.
   - Зависимости: T016, T018, T040.
-- [ ] **T042 [US3] [backend] Админ-CRUD.**
+- [x] **T042 [US3] [backend] Админ-CRUD.**
   - Файлы: `bm/http/routers/{departments.py, employees.py, models.py, fx.py, callers.py, admin_users.py}`. Операции — все `operationId` тегов departments, employees, models, fx, callers, admin-users из контракта.
   - Правила: изменения идут только через `config.apply` (аудит и `config_version`); `revealPseudonym` пишет аудит `reveal_pseudonym`; новое подразделение создаётся с `policy_mode=observe`.
   - Доводка T016/T019 по контракту 1.0.2 (14_tech_rulings.md, Б1–Б2):
@@ -230,7 +230,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - переменная `SESSION_COOKIE_SECURE` (bool, по умолчанию `false`) в `bm/settings.py`; при `true` cookie `bm_session` получает флаг `Secure`; тест на оба значения. Срок сессии остаётся константой 12 ч.
   - Готово: `pytest tests/acceptance/test_us3_config.py` и `make test`.
   - Зависимости: T016, T018, T040.
-- [ ] **T043 [P] [US3] [frontend] Экраны настройки.**
+- [x] **T043 [P] [US3] [frontend] Экраны настройки.**
   - Файлы: `src/resources/{departments, employees, models, callers, adminUsers}/*`, `src/pages/OrgImport.tsx`, `src/__tests__/*.test.tsx`.
   - Первый шаг (14_tech_rulings.md, Б1): `npm run gen:api` по контракту 1.0.2 и версия `1.0.2` в `src/__tests__/resources.contract.test.ts`; на `403 password_change_required` — переход на экран смены пароля.
   - Содержание: вход; подразделения (режим, fail_mode, разрешённые модели, лимиты день/неделя/месяц); сотрудники по псевдонимам с личными лимитами; модели с историей цен; ключи (модальное окно «ключ показан один раз»); пользователи админки; загрузка AD со сводкой.

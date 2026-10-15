@@ -90,12 +90,16 @@ def assert_matches_contract(response: httpx.Response, operation_id: str) -> None
         f"{operation_id}: статус {response.status_code} не объявлен в контракте ({sorted(declared)}); "
         f"тело: {response.text[:500]}"
     )
+    try:
+        body = req.content
+    except httpx.RequestNotRead:  # multipart (importOrg) httpx отправляет потоком; поток повторно читаемый
+        body = req.read()
     server = contract()["servers"][0]["url"]
     o_req = _Request(
         host_url=server,
         path=req.url.path,
         method=method,
-        body=req.content or None,
+        body=body or None,
         content_type=req.headers.get("content-type", ""),
         parameters=RequestParameters(
             query=dict(req.url.params),

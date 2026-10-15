@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HttpError } from 'ra-core';
-import { createAuthProvider } from '../authProvider';
+import { createAuthProvider, PASSWORD_ROUTE } from '../authProvider';
 import { createHttpClient } from '../api/http';
 import { createSessionStore } from '../api/session';
 import { fakeFetch, json, noContent, problem } from './fakeFetch';
@@ -101,6 +101,28 @@ describe('authProvider.checkError', () => {
     await expect(auth.checkError(new HttpError('x', 403))).resolves.toBeUndefined();
     expect(store.get()).not.toBeNull();
   });
+
+  it('403 password_change_required ведёт на смену пароля без выхода (контракт 1.0.2, 14_tech_rulings.md Б1)', async () => {
+    const { auth, store } = setup();
+    store.set(session() as never);
+    await expect(
+      auth.checkError(new HttpError('x', 403, { code: 'password_change_required' })),
+    ).rejects.toMatchObject({ redirectTo: PASSWORD_ROUTE, logoutUser: false });
+    expect(store.get()?.user.must_change_password).toBe(true);
+  });
+});
+
+describe('authProvider.changePassword', () => {
+  it('шлёт changePassword с CSRF; после 204 смена пароля больше не требуется', async () => {
+    const { auth, store, calls } = setup(noContent());
+    store.set(session({ must_change_password: true }) as never);
+    await auth.changePassword({ old_password: 'temporary-pass', new_password: 'new-password-123' });
+    expect(calls[0]!.method).toBe('POST');
+    expect(calls[0]!.url).toBe('/api/v1/auth/password');
+    expect(calls[0]!.headers['x-csrf-token']).toBe('csrf-from-server');
+    expect(calls[0]!.body).toEqual({ old_password: 'temporary-pass', new_password: 'new-password-123' });
+    expect(store.get()?.user.must_change_password).toBe(false);
+  });
 });
 
 describe('authProvider.logout', () => {
@@ -137,6 +159,7 @@ describe('authProvider: личность и права', () => {
       fullName: 'owner',
       role: 'budget_owner',
       departmentId: 'd-1',
+      mustChangePassword: false,
     });
     await expect(auth.getPermissions!({})).resolves.toBe('budget_owner');
   });

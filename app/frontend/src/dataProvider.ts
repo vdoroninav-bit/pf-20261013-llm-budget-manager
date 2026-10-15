@@ -12,6 +12,7 @@ import {
 import { MAX_PAGE_SIZE, RESOURCES, type ResourceConfig } from './api/resources';
 import type { HttpClient, QueryValue } from './api/http';
 import { ru } from './i18n/ru';
+import type { Schemas } from './api/types';
 
 type Row = Record<string, unknown>;
 type ListBody = { items: Row[]; total: number };
@@ -78,7 +79,67 @@ function pageLocally(rows: RaRecord[], params: GetListParams): RaRecord[] {
   return sorted.slice((page - 1) * perPage, page * perPage);
 }
 
-export function createDataProvider(http: HttpClient): DataProvider {
+/** Операции контракта вне CRUD react-admin; экраны вызывают их через useDataProvider<BmDataProvider>(). */
+export interface BmOperations {
+  putDepartmentLimits(departmentId: Identifier, limits: Schemas['LimitSet']): Promise<Schemas['LimitSet']>;
+  putEmployeeLimits(pseudonym: string, limits: Schemas['LimitSet']): Promise<Schemas['LimitSet']>;
+  revealPseudonym(pseudonym: string): Promise<Schemas['EmployeeIdentity']>;
+  listModelPrices(modelId: Identifier): Promise<Schemas['ModelPrice'][]>;
+  createModelPrice(modelId: Identifier, body: Schemas['ModelPriceCreate']): Promise<Schemas['ModelPrice']>;
+  revokeCaller(callerId: Identifier): Promise<Schemas['Caller']>;
+  importOrg(file: File, dryRun: boolean): Promise<Schemas['OrgImportSummary']>;
+}
+
+export type BmDataProvider = DataProvider & BmOperations;
+
+const seg = (id: Identifier) => encodeURIComponent(String(id));
+
+function required<T>(body: T | undefined, what: string): T {
+  if (body === undefined) throw new Error(`${what}: пустой ответ`);
+  return body;
+}
+
+export function createDataProvider(http: HttpClient): BmDataProvider {
+  const operations: BmOperations = {
+    async putDepartmentLimits(departmentId, limits) {
+      const { body } = await http.request<Schemas['LimitSet']>('PUT', `/departments/${seg(departmentId)}/limits`, {
+        body: limits,
+      });
+      return required(body, 'putDepartmentLimits');
+    },
+    async putEmployeeLimits(pseudonym, limits) {
+      const { body } = await http.request<Schemas['LimitSet']>('PUT', `/employees/${seg(pseudonym)}/limits`, {
+        body: limits,
+      });
+      return required(body, 'putEmployeeLimits');
+    },
+    async revealPseudonym(pseudonym) {
+      const { body } = await http.request<Schemas['EmployeeIdentity']>('GET', `/pseudonyms/${seg(pseudonym)}`);
+      return required(body, 'revealPseudonym');
+    },
+    async listModelPrices(modelId) {
+      const { body } = await http.request<{ items: Schemas['ModelPrice'][] }>('GET', `/models/${seg(modelId)}/prices`);
+      return required(body, 'listModelPrices').items;
+    },
+    async createModelPrice(modelId, price) {
+      const { body } = await http.request<Schemas['ModelPrice']>('POST', `/models/${seg(modelId)}/prices`, {
+        body: price,
+      });
+      return required(body, 'createModelPrice');
+    },
+    async revokeCaller(callerId) {
+      const { body } = await http.request<Schemas['Caller']>('POST', `/callers/${seg(callerId)}/revoke`);
+      return required(body, 'revokeCaller');
+    },
+    async importOrg(file, dryRun) {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('dry_run', String(dryRun));
+      const { body } = await http.request<Schemas['OrgImportSummary']>('POST', '/org/import', { body: form });
+      return required(body, 'importOrg');
+    },
+  };
+
   // Методы DataProvider обобщены по RecordType, который задаёт вызывающий экран. Транспорт видит только JSON,
   // поэтому тип записи — утверждение вызывающего; приведение сделано в одном месте, здесь.
   async function fetchList<R extends RaRecord>(resource: string, params: GetListParams): Promise<GetListResult<R>> {
@@ -111,6 +172,7 @@ export function createDataProvider(http: HttpClient): DataProvider {
   }
 
   return {
+    ...operations,
     getList: (resource, params) => fetchList(resource, params),
 
     getOne: async (resource, { id }) => ({ data: await fetchOne(resource, id) }),

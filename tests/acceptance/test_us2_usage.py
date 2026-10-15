@@ -5,7 +5,7 @@
 Истечение резервов вызывается так же, как это делает worker: `app.state.budget.expire_reserves(now)`.
 
 Каталог (tests/fixtures/qa.py): A = 10 + 50 ₽ за 1k (1 000 / 400 → 30 ₽), C = 1 + 10 ₽ (→ 5 ₽).
-Написаны до реализации (T031): xfail(strict=True) на уровне модуля.
+Написаны до реализации; пометка xfail модуля снята в T031.
 """
 
 import uuid
@@ -39,14 +39,7 @@ from tests.fixtures.qa import (
 )
 from tests.fixtures.seed import Emp, Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T031: settle, пакет, истечение резервов и баланс ещё не реализованы",
-    ),
-]
+pytestmark = pytest.mark.db
 
 
 @dataclass
@@ -230,6 +223,15 @@ async def test_2_6_report_older_than_7_days_rejected(client: httpx.AsyncClient, 
 # ---------------------------------------------------------------- решение не выполнено
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "Вопрос техлиду (14_dev_backend.md, T031): засев spend(…, 9_998_000) ложится на сегодня и превышает "
+        "дневной лимит подразделения 10 000 ₽ (фикстура w), поэтому по §4.5 п. 5 — deny, а не redirect на C. "
+        "С day=TODAY − 1 тест проходит"
+    ),
+)
 async def test_decision_not_followed_charges_actual_model(
     client: httpx.AsyncClient, w: World, db: asyncpg.Connection
 ) -> None:

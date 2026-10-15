@@ -5,7 +5,7 @@
   от часового пояса процесса;
 - `detail` ошибок вызывающей системы (401, 403, 422) — на русском.
 
-Написаны до реализации (T021): xfail(strict=True) на уровне модуля.
+Написаны до реализации; пометка xfail модуля снята в T021.
 """
 
 import os
@@ -18,14 +18,7 @@ import pytest
 from tests.fixtures.qa import CYRILLIC, catalog, decide, decision_body, post_decision, spend
 from tests.fixtures.seed import Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T021: Budget.decide и POST /api/v1/decisions ещё не реализованы",
-    ),
-]
+pytestmark = pytest.mark.db
 
 
 async def _setup(

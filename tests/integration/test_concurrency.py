@@ -4,7 +4,7 @@
 запросов. Блокировка `budget_lock … FOR UPDATE` должна дать нулевой перерасход от гонок:
 Σ резервов ≤ остатка до теста — строго; и при этом ёмкость не теряется (остаток после < цены одного вызова).
 
-Написано до реализации (T021): xfail(strict=True) на уровне модуля.
+Написано до реализации; пометка xfail модуля снята в T021.
 """
 
 import asyncio
@@ -21,14 +21,7 @@ from tests.contract.helpers import assert_matches_contract
 from tests.fixtures.qa import catalog, decision_body, key_headers, reserved, spend
 from tests.fixtures.seed import Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T021: Budget.decide и POST /api/v1/decisions ещё не реализованы",
-    ),
-]
+pytestmark = pytest.mark.db
 
 POOLS = 3
 PER_POOL = 50
