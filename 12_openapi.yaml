@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LLM Budget Manager API
-  version: 1.0.1
+  version: 1.0.2
   summary: Решения allow/deny/redirect, учёт расхода и бюджеты LLM в рублях.
   description: |
     Контракт v1 — источник истины для backend и frontend (`10_constitution.md`, «Процесс»).
@@ -27,6 +27,11 @@ info:
     - `updateAdminUser`: нельзя оставить систему без активного администратора, `409 last_admin`.
     - `ImportErrorClass` — закрытый перечень классов ошибок импорта.
     - Уточнено описание `Model.active` (выключенная модель → `deny model_unknown`, 12_arch_decision.md §4.5 п. 2).
+
+    Изменения 1.0.2 (решение техлида по вопросам backend, `14_tech_rulings.md`, Б1):
+    - У всех операций с `security: session` объявлены `401 Unauthorized` (нет сессии или она истекла) и `403 Forbidden` (роль, чужое подразделение, CSRF, не сменён временный пароль). Исключение — `me`: только 401 (доступна всем ролям, без CSRF, до смены пароля).
+    - Описание `components.responses.Forbidden` перечисляет все причины 403; в примеры `Problem.code` добавлен `password_change_required`.
+    - Другие изменения схем, путей и статусов не вносились.
   license:
     name: Proprietary (исключительные права заказчика)
 x-mcp-tools:
@@ -244,6 +249,8 @@ paths:
       x-roles: [admin, budget_owner, finance_viewer]
       responses:
         '204': { description: Сессия закрыта }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/auth/me:
     get:
@@ -273,6 +280,7 @@ paths:
       responses:
         '204': { description: Пароль изменён }
         '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   # ---------------------------------------------------------------- org
@@ -304,6 +312,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/OrgImportSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '413':
           description: Файл больше 10 МиБ (code=file_too_large)
@@ -338,6 +347,8 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/Department' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [departments]
       operationId: createDepartment
@@ -355,6 +366,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Department' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -373,6 +385,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Department' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
@@ -392,6 +405,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Department' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -416,6 +430,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LimitSet' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -440,6 +455,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/BalanceReport' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -476,6 +492,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/BalanceItem' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   # ---------------------------------------------------------------- employees
@@ -503,6 +520,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/Employee' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/employees/{pseudonym}:
@@ -519,6 +537,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Employee' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -542,6 +561,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/LimitSet' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -561,6 +581,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EmployeeIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -587,6 +608,8 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/Model' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [models]
       operationId: createModel
@@ -604,6 +627,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Model' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422':
@@ -626,6 +650,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Model' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
       tags: [models]
@@ -644,6 +670,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Model' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -668,6 +695,8 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/ModelPrice' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [models]
       operationId: createModelPrice
@@ -685,6 +714,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ModelPrice' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422':
           description: Ошибка валидации, valid_from в прошлом или USD без курса (fx_rate_missing)
@@ -710,6 +740,8 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/FxRate' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/fx-rates/{month}:
     parameters:
@@ -734,6 +766,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/FxRate' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
@@ -764,6 +797,8 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/Subscription' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [subscriptions]
       operationId: createSubscription
@@ -781,6 +816,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Subscription' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422':
           description: Ошибка валидации или USD без единого курса (fx_rate_missing)
@@ -806,6 +842,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/SubscriptionPreview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
   /api/v1/subscriptions/{subscription_id}:
@@ -825,6 +863,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Subscription' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
     patch:
@@ -844,6 +883,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Subscription' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -855,6 +895,7 @@ paths:
       x-roles: [admin]
       responses:
         '204': { description: Закрыто }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -876,6 +917,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/ProviderSource' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [provider-sources]
@@ -893,6 +935,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ProviderSource' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409':
           description: Источник (provider, ref) уже есть — ровно один способ учёта (code=source_exists)
@@ -927,6 +970,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ProviderSource' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -937,6 +981,7 @@ paths:
       x-roles: [admin]
       responses:
         '204': { description: Удалено; строки источника станут «не распределено» при следующей загрузке }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -958,6 +1003,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/Caller' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [callers]
@@ -976,6 +1022,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/CallerCreated' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '422': { $ref: '#/components/responses/ValidationError' }
 
@@ -1001,6 +1048,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Caller' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -1022,6 +1070,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Caller' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -1043,6 +1092,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/AdminUser' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
     post:
       tags: [admin-users]
@@ -1060,6 +1110,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AdminUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -1086,6 +1137,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AdminUser' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
@@ -1112,6 +1164,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ImportStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/imports/runs:
     get:
@@ -1136,6 +1190,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/ImportRun' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/imports/run:
@@ -1156,6 +1211,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ImportRun' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409':
           description: Импорт выключен флагом (code=import_disabled) или ключ не задан (code=provider_key_missing)
@@ -1196,6 +1252,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/SpendRow' } }
                   total_rub: { $ref: '#/components/schemas/Money' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/reports/spend.csv:
@@ -1220,6 +1277,7 @@ paths:
           content:
             text/csv:
               schema: { type: string }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/reports/reconciliation:
@@ -1244,6 +1302,7 @@ paths:
                 required: [items]
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/ReconciliationRow' } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   # ---------------------------------------------------------------- notifications
@@ -1271,6 +1330,8 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/Notification' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /api/v1/notifications/{notification_id}/read:
     parameters:
@@ -1285,6 +1346,7 @@ paths:
       x-roles: [admin, budget_owner]
       responses:
         '204': { description: Отмечено }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
 
@@ -1324,6 +1386,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/CallEvent' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   # ---------------------------------------------------------------- audit
@@ -1353,6 +1416,7 @@ paths:
                 properties:
                   items: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
                   total: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
 
   # ---------------------------------------------------------------- system
@@ -1459,12 +1523,16 @@ components:
 
   responses:
     Unauthorized:
-      description: Нет ключа/сессии, ключ отозван (code=unauthorized)
+      description: Нет ключа или сессии, сессия истекла или закрыта, ключ отозван (code=unauthorized)
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
     Forbidden:
-      description: Роль не позволяет или чужое подразделение (code=forbidden); попытка пишется в аудит
+      description: |
+        Доступ запрещён. Причины и коды:
+        - роль не позволяет операцию или объект чужого подразделения (code=forbidden); попытка пишется в аудит (forbidden_access);
+        - нет или неверный заголовок X-CSRF-Token на изменяющем запросе (code=forbidden);
+        - не сменён временный пароль — до смены доступны только me, logout, changePassword (code=password_change_required).
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -1552,7 +1620,7 @@ components:
         code:
           type: string
           description: Машинный код на английском
-          examples: [validation_error, unauthorized, forbidden, subject_out_of_scope, decision_not_found, fx_rate_missing, unsupported_source_kind, source_exists, import_disabled, provider_key_missing, batch_too_large, login_locked, invalid_credentials, not_found, conflict, file_too_large, last_admin]
+          examples: [validation_error, unauthorized, forbidden, password_change_required, subject_out_of_scope, decision_not_found, fx_rate_missing, unsupported_source_kind, source_exists, import_disabled, provider_key_missing, batch_too_large, login_locked, invalid_credentials, not_found, conflict, file_too_large, last_admin]
         detail: { type: string, description: Сообщение на русском }
         errors:
           type: array

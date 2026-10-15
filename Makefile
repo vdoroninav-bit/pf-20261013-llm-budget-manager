@@ -82,7 +82,10 @@ logs: ## Логи стека
 smoke: ## Smoke против поднятого стека (BASE_URL, по умолчанию http://127.0.0.1:8080)
 	BASE_URL=$${BASE_URL:-http://127.0.0.1:8080} $(UV_RUN) pytest tests/smoke
 
-backup restore load failover e2e: ## Появятся в T087 (backup/restore), T086 (load), QA (failover, e2e)
+failover: sync ## Отказные тесты SC-002/SC-003 против поднятого стека (make up); BASE_URL, BM_ADMIN_LOGIN/PASSWORD (T032)
+	BM_FAILOVER=1 BASE_URL=$${BASE_URL:-http://127.0.0.1:8080} $(UV_RUN) pytest tests/failover -v
+
+backup restore load e2e: ## Появятся в T087 (backup/restore), T086 (load), QA (e2e)
 	@echo "make $@: ещё не реализовано (см. 12_tasks.md)"; exit 2
 
 clean: ## Удалить локальные артефакты (venv, кэши, deploy/ci/out)
