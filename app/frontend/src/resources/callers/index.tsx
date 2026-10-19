@@ -26,6 +26,7 @@ import {
 import type { Schemas } from '../../api/types';
 import type { BmDataProvider } from '../../dataProvider';
 import { formatDateTimeMsk } from '../../format/date';
+import { useDepartmentNames } from '../departmentNames';
 import { ru } from '../../i18n/ru';
 import { ConfirmDialog, EmptyState, ListError, ListSlowHint, Mono, messageOf } from '../../components/common';
 import { OneTimeSecretDialog } from '../../components/OneTimeSecretDialog';
@@ -40,15 +41,6 @@ const SCOPE_CHOICES: Array<{ id: ScopeType; name: string }> = [
   { id: 'department_employees', name: t.scope_department_employees },
   { id: 'any_employee', name: t.scope_any_employee },
 ];
-
-/** Справочник подразделений для подписей (listDepartments, до 200 записей — максимум page_size). */
-function useDepartmentNames() {
-  const { data } = useGetList<Schemas['Department']>('departments', {
-    pagination: { page: 1, perPage: 200 },
-    sort: { field: 'name', order: 'ASC' },
-  });
-  return new Map((data ?? []).map((d) => [d.id, d.name]));
-}
 
 function useSources(enabled = true) {
   const { data } = useGetList<Schemas['ProviderSource']>(

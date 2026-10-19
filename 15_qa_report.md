@@ -66,3 +66,79 @@ All checks passed! / 30 files already formatted
 5. **`budget_client` (T033):** `decide()` возвращает объект с `outcome`, `fail_open` и `decision_id`. `report()` принимает `report_id`, `subject`, `model`, `occurred_at` через `**kw`, а `report_id` задаёт вызывающий: иначе SC-002 нельзя проверить «каждый report_id ровно один раз». Пакет ищется в `app/client/budget_client` (добавляется в `sys.path`).
 6. **Отказные тесты:** нужна учётная запись админки со сменённым паролем (`BM_ADMIN_LOGIN` / `BM_ADMIN_PASSWORD`, по умолчанию `ADMIN_INITIAL_*` из `deploy/.env`). Пользователь и БД в контейнере postgres по умолчанию `bm` / `bm` (`BM_PG_USER` / `BM_PG_DB`). Значения нужно сверить с T087.
 7. **Тест подписок ≥ 100%** засевает `subscription_month` напрямую. Если T051 считает M иначе (без материализации), тест нужно уточнить вместе с T050.
+
+## Исправление двух тестов и приёмочные тесты до реализации (T050, T060, T070) — 2026-10-19
+
+**Итог.** Два дефекта в тестах QA, найденные backend, исправлены, с обоих тестов снят точечный `xfail`, оба зелёные. Написаны 77 новых тестов для T050/T060/T070: 61 собран и падает по причине «не реализовано» (`xfail(strict=True, raises=(AssertionError, ImportError))`), 16 — проверки безопасности, которые уже сейчас проходят на готовом коде (регрессионные, без `xfail`). `make test` на `bm_test_qa`: **478 passed, 83 xfailed**, import-linter 3/3, `run-tests.sh full: OK`. `ruff check` / `ruff format --check` по `app/backend tests deploy/ci` чистые.
+
+### 1. Исправленные тесты (дефекты QA из 14_dev_backend.md)
+
+| Тест | Причина | Исправление |
+|---|---|---|
+| `test_us2_usage.py::test_decision_not_followed_charges_actual_model` | Засев 99 980 ₽ на сегодня превышал дневной лимит подразделения (10 000 ₽), по §4.5 п. 5 правильный ответ — `deny` | Засев перенесён на вчера (`day=TODAY − 1`): остаток месяца 20 ₽, дневной лимит не затронут, A → `redirect` на C. Проверки не менялись |
+| `test_us3_config.py::test_3_5_new_price_from_15th_old_events_unchanged` | Часы сдвигались на 22 ч, а сессия живёт 12 ч → 401 на `listModelPrices` | После `clock.set(15-е 10:00)` выполняется повторный вход. Проверки не менялись |
+
+```text
+$ pytest tests/acceptance/test_us2_usage.py::test_decision_not_followed_charges_actual_model \
+         tests/acceptance/test_us3_config.py::test_3_5_new_price_from_15th_old_events_unchanged
+2 passed in 4.04s
+```
+
+### 2. Новые тесты
+
+| Задача | Файлы | Тестов | Метка |
+|---|---|---|---|
+| T050 | `tests/acceptance/test_us4_subscriptions.py` — 4.1 (241,93 ₽ за день, 1 451,61 за неделю, 2 419,35 за месяц; амортизация в `decide`), 4.2 (сотрудник + подразделение), 4.3 (курс месяца / последний + `last_known_rate_used` / `fx_rate_missing`, курс задним числом не меняет M), 4.4 (предпросмотр до сохранения без побочных эффектов, `subs_share` один раз админу и владельцу, задача 1-го числа 00:05 фиксирует M и предупреждает), 4.5 (закрытие, удаление = сегодня, денежные поля неизменяемы), 4.6 | 15 | `T051` |
+| T060 | `tests/acceptance/test_us5_import.py` — 5.1–5.7, справочник (`source_exists`, `unsupported_source_kind`), `runImport`/`listImportRuns`/`getImportStatus`, смена `mode` → дельта, коннекторы на подменном транспорте | 22 | `T061`; коннекторы `T062`/`T063`; сверка и отчёт позднего импорта `T071` |
+| | `tests/integration/test_import_pipeline.py` — ключ строки, 4 параллельных запуска без двойного списания, инвариант «реестр = Σ charged», строка без курса, неудачный запуск ничего не меняет | 5 | `T061` |
+| | `tests/acceptance/test_sc007_reference_balance.py` — эталонный набор (токены + резерв + импорт USD + подписка USD + истечение резерва + переход месяца + поздний импорт), ручной расчёт до копейки в docstring | 2 | `T051 + T061`; админка и прослеживаемость `T071` |
+| | `tests/fixtures/anthropic/*.synthetic.json`, `tests/fixtures/openai/*.synthetic.json` + `README.md` в каждой папке | — | — |
+| T070 | `tests/acceptance/test_us6_reports_roles.py` — 6.1 (панель владельца, только своё подразделение, псевдонимы, 403 + аудит на чужое), 6.2 (CSV: BOM, `;`, заголовок по контракту, без идентификаторов сотрудников, защита от CSV-инъекции `= + - @`), 4.6 «не распределено», 6.3 (80% и 100% по одному на период, `webhook_status=disabled`), 6.5 (аудит подписок, источников, ролей через `listAudit`), журнал событий | 8 | `T071` |
+| | `tests/security/test_roles_matrix.py` — матрица из `PERMISSIONS` × контракт: запрещённая роль → 403 `forbidden` + `forbidden_access` в аудите; разрешённая → не 401/403; без сессии → 401; владелец против чужого подразделения; списки владельца | 12 (7 проходят, 5 `xfail`) | непостроенные операции (`PENDING` контрактного теста) — `T051/T061/T071` |
+| | `tests/security/test_no_content.py` — белый список текстовых колонок схемы, нет колонок `prompt/messages/content…`, поля содержимого → 422 и их значения нет ни в ответе, ни в журнале, ни в БД | 7 (проходят) | — |
+| | `tests/security/test_secrets_not_leaked.py` — `*_ADMIN_KEY` нет в `Settings`, ответах, журнале, дампе БД; API импорта; запуск коннектора с ответами 200/401/500 | 6 (2 проходят) | `T061`, `T062` |
+| общее | `tests/fixtures/qa.py`: `relogin`, `session_as`, `worker_tick`, `notifications`, `one`; `tests/fixtures/imports.py`: `cost_line`, `recorded`, `run_import`, `provider_source`, `FakeProvider` (MockTransport с пагинацией) | — | — |
+
+Метки на уровне функции перекрывают метку модуля. Поэтому тест, который ждёт T071, остаётся `xfail` после снятия метки T061 с модуля.
+
+```text
+$ pytest <8 новых файлов> -q
+16 passed, 61 xfailed in 76.34s
+
+$ pytest <8 новых файлов> -q --runxfail --tb=line | причины
+ 20 ModuleNotFoundError: bm.provider_import.sources.base
+ 14 createSubscription: 404          3 previewSubscription: 404
+  8 ModuleNotFoundError: bm.provider_import.sources.anthropic
+  2 …sources.recorded                1 …sources.openai
+  5 404 not_found на отсутствующих маршрутах   2 assert 404 == 409 (runImport)
+  3 createProviderSource: маршрута нет в приложении   1 без сессии 404   1 чужое подразделение → 404
+  1 ожидался ровно один элемент, получено 0 (threshold_80: задачи порогов ещё нет)
+   (61 из 61 — нет модуля или маршрута; ошибок в самих тестах нет)
+
+$ DATABASE_URL=postgresql://bm:bm@127.0.0.1:5432/bm_test_qa SKIP_FRONTEND=1 make test
+478 passed, 83 xfailed in 208.57s
+Contracts: 3 kept, 0 broken.
+run-tests.sh full: OK
+```
+
+### Дефекты
+
+Новых дефектов в коде нет. Проходящие проверки безопасности на готовом коде: матрица ролей по 30 построенным операциям (403 + аудит, 401 без сессии), изоляция владельца бюджета (`getDepartment`, `getEmployee`, `markNotificationRead`, списки), отказ полей содержимого без эха в ответе и журнале, отсутствие ключей провайдеров в ответах, журнале и БД.
+
+### Отклонения
+
+1. **Папка `tests/e2e/` не создана.** Как и в прошлый раз, тесты лежат там, где их требует `12_tasks.md` (`tests/acceptance`, `tests/integration`, `tests/security`), и запускаются `make test`.
+2. **Фикстуры провайдеров синтетические.** Записанных ответов спайка в репозитории нет. Структура OpenAI сверена с типами SDK `openai` 3.35.1 (`types/admin/organization/usage_costs_response.py`) [Факт]. Структура Anthropic `cost_report` собрана по описанию в `10_tech_qa.md` / `11_arch_classic.md`: документация провайдера из этой среды недоступна, а в SDK `anthropic` 1.15.0 этого эндпоинта нет. Что сверить на спайке, перечислено в `tests/fixtures/anthropic/README.md`.
+
+### Договорённости, на которые опираются тесты (backend, проверить при T051/T061–T063/T071)
+
+1. **Конвейер импорта:** `pipeline.run(pool, source, day_from, day_to, now)` — к сигнатуре из 12_plan.md §6 добавлен пул. Тестовый источник: `RecordedSource(provider, lines, *, error_class=None)`, где `error_class` — значение `ImportErrorClass`. Коннекторы: `AnthropicSource(settings, *, transport=None)` / `OpenAISource(...)`, `transport` передаётся в `egress.get_client`; при выключенном флаге — `EgressDisabled`. Если реализация будет другой, правится только `tests/fixtures/imports.py`.
+2. **Worker:** задачи подписок, импорта и порогов входят в `default_jobs`. Тесты вызывают один такт через `qa.worker_tick(app)`; при новой сигнатуре правится только он.
+3. **Строка импорта без курса USD** сохраняется с `amount_kop = NULL`, в реестр не идёт. После ввода курса следующая загрузка окна списывает её.
+4. **Сумма Anthropic `amount` — в центах** [Гипотеза, сверить на спайке]. Суммы OpenAI переводятся в `Decimal` без двоичных «хвостов» (`Decimal(str(value))`).
+
+### Вопросы техлиду
+
+1. **Доля подписок (FR-020, `SubscriptionPreview.amortization_rub`, `subs_share`)** в тестах считается за **весь** период: месяц = M. Иначе предупреждение «при наступлении нового периода» не срабатывает, ведь в первый день доля ничтожна. Эту трактовку проверяют `test_4_4_preview_month_counts_whole_month_with_existing_subscriptions` и `test_4_4_new_month_job_materializes_month_and_warns`. Подтвердите. Для дневного лимита обе трактовки совпадают.
+2. **Нужно ли запрещать `endSubscription` датой в прошлом** (422)? Такое закрытие стёрло бы уже прошедшие дни, а это противоречит 4.5. Сейчас тестом не закреплено.
+3. **`getSpendReport` для «не распределено»:** тест ждёт, что подписка учитывается по прошедшим дням (1 400 ₽ на 14.10 при M = 3 100 ₽), а не за весь месяц. Подтвердите.

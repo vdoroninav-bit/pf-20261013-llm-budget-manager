@@ -311,3 +311,61 @@ worker_started → reserves_expired → worker_stopped, exit=0; job_run: expire_
 6. **Gauge `reservations_open`** выставляет worker, а `/metrics` отдаёт `api`. Без общего каталога multiprocess (или без расчёта в `api`) этот gauge в `/metrics` не виден. Решение для DevOps (T087): общий `tmpfs` у `api` и `worker`? Или убрать gauge из worker и считать в `api`?
 7. **Формат журналов.** `python -m bm.worker` использует `logging.basicConfig` с уровнем из `LOG_LEVEL`. Общего JSON-форматтера в проекте пока нет. Чья это задача (T087?)?
 8. **Отдельная тестовая БД.** Итерации шли на `bm_test_b1` (создана мной, `CREATE DATABASE` прошёл), финальный прогон — на `bm_test`. Поддерживаю предложение Backend 2 закрепить отдельную БД за каждым исполнителем.
+
+## 2026-10-19 — Backend 1: T033 (эталонный клиент `budget_client`)
+
+**Статус:** T033 закрыта по первой части критерия готовности (`pytest tests/unit/test_client_buffer.py`). Вторая часть, `make up && make failover`, ждёт T087 и Docker: демон не запущен, отказные тесты T032 без `BM_FAILOVER=1` пропускаются (2 skipped).
+
+### Что сделано
+- `app/client/budget_client/` — отдельный пакет: `pyproject.toml` (`dependencies = []`, Python ≥ 3.11, сборка — hatchling, MIT), `README.md`, а также `budget_client/{__init__.py, client.py, buffer.py, config_cache.py, transport.py}`.
+- **Зависимости:** только stdlib (`http.client`, `sqlite3`, `json`, `threading`). Сторонних пакетов нет, поэтому белый список лицензий и транзитивная телеметрия не затрагиваются.
+- **Сеть:** только к хосту и порту из `base_url` (http/https). `http.client` не читает `HTTP(S)_PROXY`, это закреплено тестом. Телеметрии нет. Ключ API на диск не пишется (тест).
+- **`decide()`:** общий срок запроса 50 мс (соединение, отправка и ответ вместе), keep-alive по соединению на поток. Если переиспользованное соединение оказалось мёртвым, выполняется один повтор, пока срок не истёк.
+  - Сбой (таймаут, нет соединения, 5xx, 408/429, испорченный ответ) обрабатывается по `fail_mode` субъекта: `open` → `ClientDecision(outcome="allow", fail_open=True)`, `closed` → `PolicyUnavailable` (`code="policy_unavailable"`).
+  - Ответы 401/403/404/422 поднимают `ClientRequestError`, см. отклонение 2.
+- **Кэш** (`config_cache.py`): `integration-config`, ETag и `fail_mode` по субъекту из ответов `decide` лежат в JSON на диске. Запись атомарная (tmp + `os.replace` + fsync) и только при изменении.
+  - Обновление раз в `refresh_s` (60 с) через `If-None-Match`; на 304 обновляется только отметка времени.
+  - Порядок выбора `fail_mode`: (1) более свежая из двух записей — последнее решение или конфигурация подразделения субъекта; (2) для ключа `service` — его единственное подразделение; (3) `default_fail_mode`; (4) `open`, если утилита ни разу не ответила (принцип III).
+  - Кэш переживает перезапуск процесса вызывающей системы.
+- **Буфер** (`buffer.py`): SQLite, `journal_mode=WAL`, `synchronous=FULL`.
+  - Ключ — `report_id` (UNIQUE, `INSERT OR IGNORE`); `seq` задаёт порядок.
+  - Состояния: `pending` и `rejected` — построчная 4xx от сервера, строка уходит в карантин и не блокирует очередь.
+- **`report(*, decision_id, tokens, call_status, **kw)`:** `kw` — `report_id` (задаёт вызывающий, по ожиданию QA; если нет — UUID4), `subject`, `model`, `occurred_at` (по умолчанию время вызова), `actual_model`.
+  - Отчёт сначала записывается в буфер (COMMIT с fsync), затем будится фон.
+  - Без `decision_id` обязательны `subject` и `model`.
+- **`flush(max_batch=500, max_retries=5) -> int`:**
+  - Отправляет пакеты по 500 в `/usage/batch`. При сбое пакета делает паузы 0,5 → 1 → 2 → … с (не больше 30 с), не больше 5 повторов подряд; неотправленное остаётся в буфере.
+  - Возвращает число строк, принятых сервером (`charged` и `duplicate`).
+  - Отправляются только строки, записанные до начала вызова, поэтому под потоком `flush()` завершается.
+  - Явный `flush()` и фон взаимно исключены замком, строка уходит один раз (тест: 800 строк → ровно 800 отправок).
+- **Фон** (поток-демон, `background=True` по умолчанию): обновляет конфигурацию раз в 60 с и досылает буфер после `report()`. Отчёты, пришедшие в пределах 50 мс, собираются в один пакет. Если досылка не удалась, следующая попытка — через растущую паузу (не больше 60 с). Есть `close()` и контекстный менеджер.
+
+### Проверка
+```
+$ uv run ... pytest tests/unit/test_client_buffer.py -q
+37 passed in 5.97s
+$ DATABASE_URL=postgresql://bm:bm@127.0.0.1:5432/bm_test_b1 SKIP_FRONTEND=1 make test
+478 passed, 83 xfailed in 294.68s ... Contracts: 3 kept, 0 broken ... run-tests.sh full: OK
+$ ruff check / ruff format --check (app/client, tests/unit/test_client_buffer.py)
+All checks passed! / 7 files already formatted
+$ pytest tests/failover -q          # без BM_FAILOVER=1, Docker не запущен
+2 skipped
+```
+- Мутационная проверка: `synchronous=NORMAL`, `BATCH_SIZE=600` и `PAUSE_BASE_S=1.0` роняют 4 теста; после отката зелёные.
+- **Эмуляция SC-002 без Docker** (скрипт в scratchpad, не в репозитории): настоящий `bm` под uvicorn на loopback, БД `bm_test_b1`, данные через `tests.failover.stack.provision`. Поток 2 × 10 rps в течение 20 с, на 5-й секунде API получает SIGKILL и до конца потока лежит. Затем подъём и `flush()`.
+  - Итог: open в окне отказа — 149/149 `fail_open`; closed в окне отказа — 149/149 `PolicyUnavailable`; иных исключений нет.
+  - Фон 5 раз пытался дослать с паузами и отступил. После подъёма `flush()` дослал 150 из 150; в `report_key` из 250 `report_id` пропущено 0, дублей 0.
+  - p95 пары `decide`+`report` — 11,2 мс (одна машина, `report` с fsync).
+- **`make lint`: exit 1, но не из-за T033.** 5 ошибок ruff (I001, F401, UP017) в чужих файлах, которые сейчас пишет QA: `tests/acceptance/test_us5_import.py`, `test_us6_reports_roles.py`, `tests/integration/test_import_pipeline.py`. Мои файлы чистые. В одном из трёх прогонов `make test` был 1 failed. Он не воспроизвёлся, и в это время соседи меняли тесты; по T033 падений нет.
+
+### Отклонения
+1. **Добавлен модуль `transport.py`** (HTTP на `http.client`) сверх перечня файлов задачи. Он изолирует сеть и общий срок запроса.
+2. **4xx на `decide` → `ClientRequestError`, а не fail-open.** Это следует ADR-005 (ошибки запроса и доступа — не сбой). Иначе отозванный ключ или неверный запрос молча превращались бы в fail-open: при `closed` вызовы шли бы без контроля. Сбоем считаются только 408 и 429.
+3. **`report()` возвращает `report_id` (str), а не `None`**, как в плане §6. Это совместимо: вызывающий может не задавать `report_id` и всё равно знать ключ.
+4. **Таймаут досылки (10 с на пакет) и `integration-config` (2 с) отличается от 50 мс.** 50 мс относится к пути решения; пакет из 500 строк за 50 мс не обрабатывается. Значения задаются параметрами конструктора.
+5. **`timeout_ms` из `integration-config` клиент не применяет:** действует значение конструктора (по умолчанию 50).
+
+### Вопросы техлиду / QA / DevOps
+1. **QA (T032): прогрев в SC-002 может мигать.** Первое решение после подъёма или подготовки данных у холодного API заняло 55 мс (замер httpx), то есть больше 50 мс. Тогда `warm.fail_open=True`, и assert прогрева падает до начала теста. Предлагаю в прогреве повторять `decide` до ответа без `fail_open` (до N раз). В эмуляции так и сделано: хватило одной попытки.
+2. **DevOps (зона `Makefile`):** `make lint` не охватывает `app/client`. Предлагаю добавить `app/client` в пути `ruff check/format` целей `lint` и `fmt`. Сейчас проверено вручную тем же конфигом.
+3. **DevOps / T088:** включить `app/client/budget_client` в SBOM (пакет без зависимостей) и описать в `docs/integration-guide.md` (T090) права на `state_dir`. В буфере лежат логины субъектов (ПДн), ключа там нет.

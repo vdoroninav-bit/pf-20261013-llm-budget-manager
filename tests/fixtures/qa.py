@@ -1,4 +1,5 @@
-"""Помощники приёмочных тестов QA (T020, T030, T040): вызовы Decision API, засев расхода, вход в админку.
+"""Помощники приёмочных тестов QA (T020, T030, T040, T050, T060, T070): вызовы Decision API, засев расхода,
+вход в админку, такт worker.
 
 Только тестовый код: прямые INSERT в реестр, сборка запросов по контракту и проверка ответов
 `assert_matches_contract`. Бизнес-логики здесь нет.
@@ -15,6 +16,8 @@
 
 import re
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Any
 from uuid import UUID
@@ -241,3 +244,56 @@ async def admin_client_login(
     resp = await client.post("/api/v1/auth/login", json={"login": login, "password": ADMIN_PASSWORD})
     assert resp.status_code == 200, resp.text
     return {"X-CSRF-Token": str(resp.json()["csrf_token"])}
+
+
+async def relogin(client: httpx.AsyncClient, login: str = "root") -> dict[str, str]:
+    """Повторный вход существующего пользователя (сессия живёт 12 ч — после сдвига часов она истекает)."""
+    resp = await client.post("/api/v1/auth/login", json={"login": login, "password": ADMIN_PASSWORD})
+    assert resp.status_code == 200, resp.text
+    return {"X-CSRF-Token": str(resp.json()["csrf_token"])}
+
+
+@asynccontextmanager
+async def session_as(
+    client: httpx.AsyncClient,
+    seed: Seed,
+    login: str,
+    *,
+    role: str,
+    department: UUID | None = None,
+) -> AsyncIterator[tuple[httpx.AsyncClient, dict[str, str]]]:
+    """Второй клиент админки на том же приложении (своя cookie-сессия): (клиент, заголовок CSRF)."""
+    async with httpx.AsyncClient(transport=client._transport, base_url=str(client.base_url)) as other:
+        csrf = await admin_client_login(other, seed, login, role=role, department=department)
+        yield other, csrf
+
+
+# ---------------------------------------------------------------- worker
+
+
+async def worker_tick(app: Any) -> list[str]:
+    """Один такт worker на часах приложения: выполняются все задачи `default_jobs` (новый планировщик —
+    у всех задач наступил срок; задачи «по расписанию» сами сверяются с часами).
+
+    Договорённость с backend (T051, T061, T071): задачи подписок, импорта и порогов входят в
+    `bm.worker.jobs.default_jobs`. Если её сигнатура изменится, поправить нужно только этот помощник.
+    """
+    from bm.worker.jobs import Scheduler, default_jobs
+
+    ran: list[str] = await Scheduler(app.state.pool, default_jobs(app.state.budget), app.state.clock).tick()
+    return ran
+
+
+async def notifications(client: httpx.AsyncClient, kind: str | None = None) -> list[dict[str, Any]]:
+    """Лента уведомлений текущей сессии (`listNotifications`), при необходимости — только вида `kind`."""
+    resp = await client.get("/api/v1/notifications", params={"page_size": 200})
+    assert resp.status_code == 200, f"listNotifications: {resp.status_code} {resp.text[:300]}"
+    assert_matches_contract(resp, "listNotifications")
+    items: list[dict[str, Any]] = resp.json()["items"]
+    return [n for n in items if kind is None or n["kind"] == kind]
+
+
+def one(items: list[Any]) -> Any:
+    """Единственный элемент списка; иначе AssertionError (а не ValueError распаковки — для xfail(raises=…))."""
+    assert len(items) == 1, f"ожидался ровно один элемент, получено {len(items)}: {items!r}"[:500]
+    return items[0]

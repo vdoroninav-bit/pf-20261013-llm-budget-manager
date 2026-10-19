@@ -87,3 +87,44 @@ export const orgSummary = (over: Partial<Schemas['OrgImportSummary']> = {}): Sch
   warnings: [{ line: 12, message: 'Нет отметки основной группы — выбрана первая по порядку' }],
   ...over,
 });
+
+export const SUB_ID = '88888888-8888-4888-8888-888888888888';
+
+export const subscription = (over: Partial<Schemas['Subscription']> = {}): Schemas['Subscription'] => ({
+  id: SUB_ID,
+  provider: 'Anthropic',
+  plan: 'Claude Team',
+  seat_price: '2500.00',
+  currency: 'RUB',
+  seats: 3,
+  start_date: '2026-10-01',
+  end_date: null,
+  assignee: { type: 'department', ref: DEP_ID },
+  monthly_total_rub: '7500.00',
+  fx_warning: null,
+  created_at: '2026-10-01T09:00:00+03:00',
+  ...over,
+});
+
+export const fxRate = (over: Partial<Schemas['FxRate']> = {}): Schemas['FxRate'] => ({
+  month: '2026-10',
+  usd_rub: '92.5000',
+  entered_by: 'admin',
+  entered_at: '2026-10-01T10:00:00+03:00',
+  ...over,
+});
+
+export const subscriptionPreview = (
+  over: Partial<Schemas['SubscriptionPreview']> = {},
+): Schemas['SubscriptionPreview'] => ({
+  department_id: DEP_ID,
+  periods: [
+    { period: 'day', limit_rub: '5000.00', amortization_rub: '241.94', share_pct: '4.8' },
+    { period: 'week', limit_rub: '20000.00', amortization_rub: '1693.55', share_pct: '8.5' },
+    { period: 'month', limit_rub: null, amortization_rub: '7500.00', share_pct: null },
+  ],
+  warn_threshold_pct: 50,
+  warn: false,
+  fx_warning: null,
+  ...over,
+});

@@ -75,3 +75,18 @@ export function compareMoney(a: string, b: string): -1 | 0 | 1 {
   const y = toKopecks(b);
   return x === y ? 0 : x > y ? 1 : -1;
 }
+
+/** Ввод курса USD/₽ → RateDecimal ('^[0-9]+(\.[0-9]{1,4})?$'). */
+export function parseRateInput(input: string | null | undefined): Parsed<string> {
+  const s = normalize(input ?? '');
+  const m = /^(\d+)(?:\.(\d{1,4}))?$/.exec(s);
+  if (!m) return { ok: false };
+  const int = m[1]!.replace(/^0+(?=\d)/, '');
+  return { ok: true, value: m[2] !== undefined ? `${int}.${m[2]}` : int };
+}
+
+/** RateDecimal → «92,5000 ₽ за 1 $» (всегда 4 знака, без float). */
+export function formatRate(rate: string): string {
+  const [int = '0', frac = ''] = rate.split('.');
+  return `${formatDecimal(`${int}.${frac.padEnd(4, '0')}`)}${NNBSP}₽ за 1${NNBSP}$`;
+}

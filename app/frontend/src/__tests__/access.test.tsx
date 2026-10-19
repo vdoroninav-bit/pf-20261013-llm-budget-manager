@@ -39,13 +39,14 @@ const menuItems = async () => {
     .map((el) => el.textContent?.trim());
 };
 
-describe('меню по ролям (13_design.md §4, пункты T043)', () => {
+describe('меню по ролям (13_design.md §4, пункты T043, T052)', () => {
   it('администратор видит все экраны настройки в фиксированном порядке', async () => {
     renderApp('#/', { role: 'admin', handlers: {} });
     expect(await menuItems()).toEqual([
       'Панель',
       'Подразделения',
       'Модели',
+      'Подписки и курсы',
       'Загрузка файла AD',
       'Ключи систем',
       'Пользователи',
@@ -54,11 +55,11 @@ describe('меню по ролям (13_design.md §4, пункты T043)', () =>
 
   it('владелец бюджета видит «Моё подразделение» и модели, без загрузки AD, ключей и пользователей', async () => {
     renderApp('#/', { role: 'budget_owner', handlers: {} });
-    expect(await menuItems()).toEqual(['Панель', 'Моё подразделение', 'Модели']);
+    expect(await menuItems()).toEqual(['Панель', 'Моё подразделение', 'Модели', 'Подписки и курсы']);
   });
 
   it('наблюдатель-финансист видит подразделения и модели', async () => {
     renderApp('#/', { role: 'finance_viewer', handlers: {} });
-    expect(await menuItems()).toEqual(['Панель', 'Подразделения', 'Модели']);
+    expect(await menuItems()).toEqual(['Панель', 'Подразделения', 'Модели', 'Подписки и курсы']);
   });
 });

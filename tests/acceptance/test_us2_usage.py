@@ -223,19 +223,12 @@ async def test_2_6_report_older_than_7_days_rejected(client: httpx.AsyncClient, 
 # ---------------------------------------------------------------- решение не выполнено
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "Вопрос техлиду (14_dev_backend.md, T031): засев spend(…, 9_998_000) ложится на сегодня и превышает "
-        "дневной лимит подразделения 10 000 ₽ (фикстура w), поэтому по §4.5 п. 5 — deny, а не redirect на C. "
-        "С day=TODAY − 1 тест проходит"
-    ),
-)
 async def test_decision_not_followed_charges_actual_model(
     client: httpx.AsyncClient, w: World, db: asyncpg.Connection
 ) -> None:
-    await spend(db, "department", w.dep, 9_998_000)  # остаток месяца 20 ₽ → A перенаправляется на C
+    # Расход засеян на вчера: дневной лимит подразделения (10 000 ₽) не задет, остаток месяца 20 ₽ →
+    # A (резерв 70 ₽) не помещается и перенаправляется на C (резерв 5 ₽).
+    await spend(db, "department", w.dep, 9_998_000, day=TODAY - timedelta(days=1))
     d = await decide(client, w.key, decision_body(model="A"))
     assert d["outcome"] == "redirect" and d["model"] == "C"
     r = await report(client, w.key, usage_body(d["decision_id"], 1000, 400, actual_model="A"))

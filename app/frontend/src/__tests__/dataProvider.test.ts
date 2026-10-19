@@ -105,7 +105,7 @@ describe('dataProvider.getList: ответ', () => {
   it('для операции без пагинации (listFxRates) не шлёт параметры и листает на клиенте', async () => {
     const items = ['2026-07', '2026-08', '2026-09'].map((month) => ({ month, usd_rub: '90.0000' }));
     const { dp, calls } = setup(json(200, { items, total: 3 }));
-    const res = await dp.getList('fxRates', {
+    const res = await dp.getList('fx-rates', {
       pagination: { page: 2, perPage: 2 },
       sort: { field: 'month', order: 'DESC' },
       filter: {},

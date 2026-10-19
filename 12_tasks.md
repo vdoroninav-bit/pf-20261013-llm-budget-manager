@@ -7,7 +7,8 @@ description: "Задачи LLM Budget Manager v1 по ролям"
 **Вход**: `12_plan.md` (обязателен), `10_tech_spec.md` (сценарии US1–US7), `12_openapi.yaml` (контракт), `12_arch_decision.md` §4.5 (алгоритм решения), `10_constitution.md`.
 **Старт**: только после записи «согласен» в `12_arch_decision.md` → «Согласование» и после прохождения Г1 (вопрос 2 в APPROVAL).
 **Исполнители**: AI-агенты, каждая задача делается за один проход. Поэтому у каждой задачи указаны точные файлы, зависимости и команда, которая доказывает готовность. Задача закрыта, только когда к ней приложен вывод этой команды (принцип VII).
-**Решения техлида по ходу разработки**: `13_design_rulings.md` (дизайн, контракт 1.0.1), `14_tech_rulings.md` (вопросы backend и frontend, контракт 1.0.2). Пометка «(14_tech_rulings.md, Б…/Ф…)» у пункта задачи означает, что пункт добавлен этим решением.
+**Решения техлида по ходу разработки**: `13_design_rulings.md` (дизайн, контракт 1.0.1), `14_tech_rulings.md` (вопросы backend и frontend, контракт 1.0.2; пакет 2 — без правок контракта). Пометка «(14_tech_rulings.md, Б…/Ф…)» у пункта задачи означает, что пункт добавлен этим решением.
+**Тестовые БД** (14_tech_rulings.md, пакет 2, Q8): у каждого исполнителя своя БД на локальном PostgreSQL — `bm_test_b1`, `bm_test_b2`, `bm_test_fe`, `bm_test_qa`, `bm_test_devops` (`CREATE DATABASE … OWNER bm`). Вывод команды готовности, полученный на своей БД, принимается. `bm_test` — только для прогона оркестратора и релизного прогона T089, без параллельных запусков.
 
 ## Формат: `[ID] [P?] [Story] [роль] Описание`
 
@@ -189,13 +190,14 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - SC-003: `docker kill api` под нагрузкой; каждый ответ 200 на `/usage` есть в БД.
   - Готово: тесты FAIL (клиента нет).
   - Зависимости: T030.
-- [ ] **T033 [US1] [backend] Эталонный клиент `budget_client`.**
+- [x] **T033 [US1] [backend] Эталонный клиент `budget_client`.**
   - Файлы: `app/client/budget_client/{pyproject.toml, budget_client/client.py, buffer.py, config_cache.py}`, `tests/unit/test_client_buffer.py`.
   - Правила:
     - таймаут 50 мс;
     - кэш `integration-config` и `fail_mode` по субъекту на диске, обновление раз в 60 с;
     - буфер — SQLite (stdlib) с `PRAGMA synchronous=FULL`, ключ `report_id`;
-    - `flush()` пакетами по 500 с экспоненциальной паузой.
+    - `flush()` пакетами по 500 с экспоненциальной паузой;
+    - интерфейс, на который опираются отказные тесты (14_tech_rulings.md, пакет 2, QA5): `decide()` возвращает объект с `outcome`, `fail_open`, `decision_id`; `report()` принимает `report_id` (задаёт вызывающий), `subject`, `model`, `occurred_at`; пакет лежит в `app/client/budget_client`.
   - Готово: `pytest tests/unit/test_client_buffer.py`; после T087 — `make up && make failover`.
   - Зависимости: T031, T032.
 
@@ -221,6 +223,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Файлы: `bm/org_import/service.py` (`import_ad_csv(conn, data: bytes, dry_run: bool, actor) -> OrgImportSummary`), `bm/http/routers/org.py` (`importOrg`).
   - Формат: CSV `login;display_name;group;is_primary`, UTF-8. Псевдоним — `emp-` + 10 случайных hex, выдаётся один раз.
   - Готово: тесты 3.1, 3.2 и `test_removed_*` проходят.
+  - Состояние (14_tech_rulings.md, пакет 2, В2-0): реализация сделана; `test_removed_employee_keeps_period_spend` упирается в `getDepartmentBalance` (T071). Отметка `[x]` ставится в T071 после снятия `xfail` с этого теста.
   - Зависимости: T016, T018, T040.
 - [x] **T042 [US3] [backend] Админ-CRUD.**
   - Файлы: `bm/http/routers/{departments.py, employees.py, models.py, fx.py, callers.py, admin_users.py}`. Операции — все `operationId` тегов departments, employees, models, fx, callers, admin-users из контракта.
@@ -234,7 +237,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Файлы: `src/resources/{departments, employees, models, callers, adminUsers}/*`, `src/pages/OrgImport.tsx`, `src/__tests__/*.test.tsx`.
   - Первый шаг (14_tech_rulings.md, Б1): `npm run gen:api` по контракту 1.0.2 и версия `1.0.2` в `src/__tests__/resources.contract.test.ts`; на `403 password_change_required` — переход на экран смены пароля.
   - Содержание: вход; подразделения (режим, fail_mode, разрешённые модели, лимиты день/неделя/месяц); сотрудники по псевдонимам с личными лимитами; модели с историей цен; ключи (модальное окно «ключ показан один раз»); пользователи админки; загрузка AD со сводкой.
-  - Работа идёт по типам из `schema.d.ts`; в тестах API мокается через MSW.
+  - Работа идёт по типам из `schema.d.ts`; в тестах API мокается фейковым `fetch` `src/__tests__/support/contractApi.ts`, который сверяет каждый запрос и ответ с `12_openapi.yaml` (вместо MSW — 14_tech_rulings.md, пакет 2, Ф3). Имя ресурса react-admin совпадает с маршрутом из screens.md: `admin-users` (папка `adminUsers/` остаётся; пакет 2, Ф2).
   - Готово: `npm --prefix app/frontend run test` — у каждого ресурса есть тест «рендерит русские подписи и отправляет запрос по контракту».
   - Зависимости: T002, T003.
 
@@ -244,8 +247,11 @@ description: "Задачи LLM Budget Manager v1 по ролям"
 
 ## Phase 6: US4 — Подписки (P2)
 
-- [ ] **T050 [US4] [qa] Приёмочные тесты подписок.** Тесты пишутся до реализации.
+- [x] **T050 [US4] [qa] Приёмочные тесты подписок.** Тесты пишутся до реализации.
   - Файл: `tests/acceptance/test_us4_subscriptions.py`.
+  - Первый шаг — доводка засева в тестах T030/T040 (14_tech_rulings.md, пакет 2, В1-1 и В2-д). Проверки не меняются, точечные `xfail` снимаются:
+    - `test_us2_usage.py::test_decision_not_followed_charges_actual_model` — 99 980 ₽ засеваются на `TODAY - timedelta(days=1)`, а не на сегодня;
+    - `test_us3_config.py::test_3_5_new_price_from_15th_old_events_unchanged` — повторный вход после `clock.set(15-е 10:00)` (сессия живёт 12 ч).
   - Покрытие:
     - сценарии 4.1–4.6;
     - подписка сотрудника списывается и из его лимита, и из лимита подразделения;
@@ -255,15 +261,15 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - закрытие — прошлое сохраняется;
     - `unallocated` не списывается;
     - курс изменён задним числом — M месяца не меняется.
-  - Готово: тесты FAIL.
+  - Готово: тесты FAIL (новые); тесты T030/T040 после доводки — PASS.
   - Зависимости: T030.
 - [ ] **T051 [US4] [backend] Подписки и амортизация в остатке.**
   - Файлы: `bm/http/routers/subscriptions.py` (5 операций), `bm/budget/service.py` (амортизация в `balance` и `decide` через `subscription_month`), `bm/worker/jobs.py` (задача на 1-е число 00:05 МСК: материализовать `subscription_month`, проверить долю подписок).
-  - Правила: денежные поля подписки неизменяемы, их защищает триггер из T014.
-  - Готово: `pytest tests/acceptance/test_us4_subscriptions.py` и `make test`.
+  - Правила: денежные поля подписки неизменяемы, их защищает триггер из T014. M месяца берётся только из материализованной `subscription_month` — на это опирается тест QA «подписки ≥ 100%» (14_tech_rulings.md, пакет 2, QA7).
+  - Готово: `pytest tests/acceptance/test_us4_subscriptions.py` и `make test`; снят точечный `xfail(T051)` с `test_subscriptions_over_100_percent_block_paid_calls`.
   - Зависимости: T031, T019, T050.
-- [ ] **T052 [P] [US4] [frontend] Подписки и курсы.**
-  - Файлы: `src/resources/subscriptions/*` (форма с живым предпросмотром `previewSubscription`, предупреждение при доле ≥ порога), `src/resources/fxRates/*`, тесты.
+- [x] **T052 [P] [US4] [frontend] Подписки и курсы.**
+  - Файлы: `src/resources/subscriptions/*` (форма с живым предпросмотром `previewSubscription`, предупреждение при доле ≥ порога), `src/resources/fxRates/*` (имя ресурса react-admin — `fx-rates`, совпадает с маршрутом `#/fx-rates`, на который уже ведёт ссылка «Ввести курс»; 14_tech_rulings.md, пакет 2, Ф2), тесты.
   - Готово: `npm --prefix app/frontend run test`.
   - Зависимости: T043.
 
@@ -271,7 +277,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
 
 ## Phase 7: US5 — Импорт Anthropic и OpenAI (P2)
 
-- [ ] **T060 [US5] [qa] Приёмочные тесты импорта и эталонный остаток SC-007.** Тесты пишутся до реализации.
+- [x] **T060 [US5] [qa] Приёмочные тесты импорта и эталонный остаток SC-007.** Тесты пишутся до реализации.
   - Файлы: `tests/acceptance/test_us5_import.py`, `tests/integration/test_import_pipeline.py`, `tests/acceptance/test_sc007_reference_balance.py`, `tests/fixtures/anthropic/*.json`, `tests/fixtures/openai/*.json`.
   - Фикстуры берутся из записанных ответов спайка (день 2). Если их нет, фикстуры собираются по документации провайдеров с пометкой `# synthetic` и заменяются после спайка.
   - Покрытие:
@@ -289,14 +295,21 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Готово: тесты T060 на `RecordedSource` проходят, `make test` зелёный.
   - Зависимости: T017, T019, T060.
 - [ ] **T062 [P] [US5] [backend] Коннектор Anthropic.**
-  - Файлы: `bm/provider_import/sources/anthropic.py`, `tests/integration/test_anthropic_source.py`.
+  - Файлы: `bm/provider_import/sources/anthropic.py`, `tests/integration/test_anthropic_source.py`; для прокси — `bm/egress/client.py`, `bm/settings.py`, `tests/security/test_no_egress.py`.
   - Работа: `cost_report` с шагом `1d`, группировка по `workspace_id` и `description`, пагинация, сумма в USD; модель извлекается из `description`. Ключ берётся только из `ANTHROPIC_ADMIN_KEY(_FILE)`, HTTP-клиент — только через `egress`. В тестах вместо сети — транспорт httpx с фикстурами.
-  - Прокси: `egress` по-прежнему игнорирует прокси из окружения (`trust_env=False`). Явная настройка прокси для импорта не делается, пока заказчик не подтвердит, что из его контура к API провайдеров можно выйти только через прокси (14_tech_rulings.md, Б4, вопрос заказчику).
+  - Прокси для импорта (решение заказчика по Б4 — «сделайте оба»; 14_tech_rulings.md, пакет 2, Б4):
+    - `egress` по-прежнему не берёт прокси из окружения (`trust_env=False`); стандартные `HTTP_PROXY`/`HTTPS_PROXY` не действуют;
+    - новая переменная `IMPORT_HTTPS_PROXY` в `bm/settings.py`, по умолчанию пусто. Пусто — прямой выход, как раньше. Задана — явный `proxy=` у httpx-клиента **только** для назначений `anthropic` и `openai`; к `webhook` не применяется никогда;
+    - значение — URL со схемой `http://` или `https://`, иначе ошибка конфигурации при старте (текст на русском);
+    - логин и пароль из URL прокси не попадают в журналы, `job_run`, ответы API и на экран «Состояние импорта» (маскируются);
+    - белый список хостов назначения в `egress` не меняется: через прокси идут запросы только к `api.anthropic.com` / `api.openai.com`;
+    - тесты: прокси пусто → клиент без прокси; прокси задан → прокси у клиента `anthropic`, у `webhook` его нет; `IMPORT_ENABLED=false` при заданном прокси → `EgressDisabled` и 0 соединений, включая соединение с прокси; URL с паролем не появляется в журнале.
   - Готово: `make test`.
   - Зависимости: T061.
 - [ ] **T063 [P] [US5] [backend] 🔻3 Коннектор OpenAI.**
   - Файлы: `bm/provider_import/sources/openai.py`, `tests/integration/test_openai_source.py`.
   - Работа: `GET /organization/costs`, `bucket_width=1d`, `group_by=project_id,line_item`, пагинация. Названия полей сумм сверяются с фикстурами спайка.
+  - Прокси (14_tech_rulings.md, пакет 2, Б4): клиент берётся только из `egress("openai")`, поэтому `IMPORT_HTTPS_PROXY` применяется автоматически; своей настройки прокси в коннекторе нет. Тест: при заданном прокси он есть у клиента `openai`. Настройка прокси сделана в T062 и остаётся, даже если T063 урезана.
   - Готово: `make test`.
   - Зависимости: T061.
 - [ ] **T064 [P] [US5] [frontend] Источники и состояние импорта.**
@@ -308,26 +321,35 @@ description: "Задачи LLM Budget Manager v1 по ролям"
 
 ## Phase 8: US6 — Отчёты, роли, уведомления (P2)
 
-- [ ] **T070 [US6] [qa] Приёмочные тесты отчётов и безопасности.** Тесты пишутся до реализации.
+- [x] **T070 [US6] [qa] Приёмочные тесты отчётов и безопасности.** Тесты пишутся до реализации.
   - Файлы: `tests/acceptance/test_us6_reports_roles.py`, `tests/security/{test_roles_matrix.py, test_no_content.py, test_secrets_not_leaked.py}`.
   - Покрытие:
     - сценарии 6.1–6.6;
     - CSV без идентификаторов сотрудников, с защитой от CSV-инъекции;
-    - пороги 80% и 100% — по одному уведомлению за период;
+    - пороги 80% и 100% — по одному уведомлению за период; порог считается по `used_pct` (расход без резервов, 14_tech_rulings.md, пакет 2, В1-5);
     - матрица «роль × операция» строится из `PERMISSIONS` и контракта: 0 успешных обращений к чужим данным, 100% отказов в аудите;
     - в схеме БД нет текстовых колонок, кроме белого списка; в логах прогона нет полей `prompt`, `messages`, `content`;
     - значения `*_ADMIN_KEY` не встречаются в логах, ответах и дампе БД.
   - Готово: тесты FAIL.
   - Зависимости: T042.
 - [ ] **T071 [US6] [backend] Отчёты, баланс подразделения, журналы, фоновые задачи.**
-  - Файлы: `bm/reports/service.py`, `bm/http/routers/{reports.py, events.py, audit.py}`, `bm/http/routers/departments.py` (`getDepartmentBalance`, `listDepartmentBalanceItems`), `bm/worker/jobs.py`.
+  - Файлы: `bm/reports/service.py`, `bm/http/routers/{reports.py, events.py, audit.py}`, `bm/http/routers/departments.py` (`getDepartmentBalance`, `listDepartmentBalanceItems`), `bm/worker/jobs.py`, `bm/logging.py`.
   - Фоновые задачи: пороги раз в минуту; `agg_daily` раз в сутки; ретенция — создание партиций на 2 месяца вперёд и `DROP` партиций старше `RETENTION_DETAIL_MONTHS`.
   - Ключ уведомлений без периода (14_tech_rulings.md, Б5): `fx_missing` — `department_id=NULL`, `period=NULL`, `period_start` = 1-е число месяца без курса (одно уведомление на месяц); `reservation_no_report` — подразделение резерва, `period=NULL`, `period_start` = дата МСК обнаружения.
-  - Готово: `pytest tests/acceptance/test_us6_reports_roles.py tests/security` и `make test`; контрактный тест из T015 снимает `xfail` для всех операций, кроме MCP.
+  - Правила `LimitBalance` (14_tech_rulings.md, пакет 2, В1-5) — одинаково в `getCallerBalance`, `getDepartmentBalance` и проверке порогов:
+    - `spent` — весь расход периода (токены, импорт, амортизация подписок), без резервов; `remaining_rub = limit − spent − reserved`;
+    - `used_pct = spent / limit × 100`, один знак, `ROUND_HALF_UP`, может быть больше 100; при `limit = 0`: `spent = 0` → `"0.0"`, иначе `"100.0"`;
+    - `over_limit = spent > limit` (фактический перерасход; резервы его не создают). Текущий код T031 (`remaining < 0`) приводится к этому правилу с тестом.
+  - Журналы и метрики (14_tech_rulings.md, пакет 2, В1-6, В1-7):
+    - `bm/logging.py` — JSON-форматтер на stdlib `logging` (без новых зависимостей): одна строка JSON, поля `ts`, `level`, `logger`, `msg` и белый список доп. полей; уровень из `LOG_LEVEL`; подключается в `api` и `worker`; тест — строка журнала разбирается как JSON и не содержит значений `*_ADMIN_KEY` и `IMPORT_HTTPS_PROXY`;
+    - gauge `reservations_open` из worker убирается (worker `/metrics` не отдаёт, общий каталог multiprocess между контейнерами не заводится).
+  - `decision_not_followed` (пакет 2, В1-3): `call_record.final_model` = фактическая модель, по которой списаны деньги; отчёты и разбивка по моделям идут по `final_model`. Новая колонка и миграция не нужны.
+  - Готово: `pytest tests/acceptance/test_us6_reports_roles.py tests/security` и `make test`; контрактный тест из T015 снимает `xfail` для всех операций, кроме MCP; снят `xfail` с `test_removed_employee_keeps_period_spend` и T041 отмечена `[x]`.
   - Зависимости: T031, T019, T051, T061, T070.
 - [ ] **T072 [P] [US6] [frontend] Панель, отчёты, журналы.**
   - Файлы: `src/pages/{Dashboard, Reports, Reconciliation, Notifications}.tsx`, `src/resources/{events, audit}/*`, меню по ролям, тесты.
   - Содержание: панель — по каждому периоду лимит, расход по источникам, резервы, остаток, дата сброса и пометка «бюджет занят подписками»; разбивка по моделям; выгрузка CSV.
+  - Доступность (14_tech_rulings.md, пакет 2, Ф1): axe не подключается. Контраст проверяет тест `src/__tests__/contrast.test.ts`: функция по формуле WCAG 2.x (без зависимостей) считает отношение для всех пар из 13_design.md §8 по значениям `design/tokens.json` в обеих темах; порог 4,5:1 для текста и 3:1 для `border-strong`. ARIA и клавиатура — запросами `getByRole`/`getByLabelText` и проверками фокуса, как в T043.
   - Готово: `npm --prefix app/frontend run test && npm --prefix app/frontend run build`.
   - Зависимости: T043.
 - [ ] **T073 [US6] [backend] 🔻2 Webhook-канал.**
@@ -360,25 +382,29 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Зависимости: T031, T087.
 - [ ] **T087 [—] [devops] Полная поставка.**
   - Файлы: `deploy/docker-compose.yml` (сервисы `api`, `worker`, `postgres:18`, `backup`; сети `core` с `internal: true` для `postgres` и `backup`, `edge` для `api` и `worker`; healthcheck; `restart: unless-stopped`; порт `${BIND_ADDR}:${API_PORT}:8080`; секреты через `*_FILE`), `deploy/Dockerfile` (стадия node собирает SPA, стадия python копирует `dist` в `/app/static/admin`), `deploy/backup/{backup.sh, restore.sh}`, `tests/smoke/test_smoke.py` (тест пишется первым).
-  - Дополнительно (14_tech_rulings.md, Б2, Б6): `SESSION_COOKIE_SECURE=false` с комментарием в `deploy/.env.example` («true — если админка открыта через HTTPS»); у `api` — `PROMETHEUS_MULTIPROC_DIR` на `tmpfs`, каталог очищается при старте контейнера.
+  - Дополнительно (14_tech_rulings.md, Б2, Б6): `SESSION_COOKIE_SECURE=false` с комментарием в `deploy/.env.example` («true — если админка открыта через HTTPS»); у `api` — `PROMETHEUS_MULTIPROC_DIR` на `tmpfs`, каталог очищается при старте контейнера. Каталог только у `api`, с `worker` не делится (пакет 2, В1-6).
+  - Дополнительно (14_tech_rulings.md, пакет 2, Б4): `IMPORT_HTTPS_PROXY=` (пусто) в `deploy/.env.example` с комментарием «пусто — прямой выход к API провайдеров; задайте `http(s)://хост:порт`, если выход только через корпоративный прокси; действует только на импорт расхода при `IMPORT_ENABLED=true`, стандартные HTTP(S)_PROXY утилита игнорирует». Переменная передаётся тем сервисам, которые запускают импорт (`worker`, а также `api`, если кнопка «Загрузить сейчас» выполняет импорт в процессе `api`).
+  - Дополнительно (пакет 2, QA6): пользователь и БД PostgreSQL в контейнере — `bm` / `bm`; значения `BM_ADMIN_LOGIN` / `BM_ADMIN_PASSWORD` для отказных тестов по умолчанию берутся из `ADMIN_INITIAL_*`.
   - Цели Makefile: `up`, `down`, `smoke`, `backup`, `restore`.
   - Готово: `make up && make smoke && make backup && make restore && make smoke`; время от `git clone` до первого решения ≤ 30 мин по `docs/admin-guide.md` (SC-009, замер QA).
   - Зависимости: T031, T043.
 - [ ] **T088 [P] [—] [devops] SDL-проверки.**
   - Файлы: `deploy/ci/check.sh`, `deploy/ci/licenses-allow.txt` (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, PostgreSQL, PSF-2.0, 0BSD, Python-2.0), цели `check` и `egress-host-check`.
-  - Работа: CycloneDX SBOM для Python и npm, pip-audit, npm audit, Trivy по образу. Сборка падает на GPL, AGPL, SSPL, LGPL и на `@react-admin/ra-*`.
+  - Работа: CycloneDX SBOM для Python и npm, pip-audit, npm audit, Trivy по образу. Сборка падает на GPL, AGPL, SSPL, LGPL и на `@react-admin/ra-*`. В SBOM учитывается прямая зависимость `python-multipart` (Apache-2.0, добавлена в T041). MPL-2.0 в белый список не добавляется (пакет 2, Ф1).
   - Готово: `make check` с exit 0 и SBOM в `deploy/ci/out/`.
   - Зависимости: T001.
 - [ ] **T090 [P] [—] [devops] Руководство администратора.**
   - Файл: `docs/admin-guide.md` (RU): установка за ≤ 30 мин; переменные окружения; резервное копирование и восстановление; включение импорта и ключи; правила денег (копейки, накопительная амортизация, сутки UTC импорта); режимы политики; условие о локальном акте перед `enforce`; админка через HTTPS на обратном прокси — `SESSION_COOKIE_SECURE=true`, срок сессии 12 ч; адрес webhook — IP, а не имя хоста (14_tech_rulings.md, Б2, Б3).
+  - Раздел «Импорт через корпоративный прокси» (14_tech_rulings.md, пакет 2, Б4): по умолчанию импорт выходит к `api.anthropic.com` / `api.openai.com` напрямую; если прямого выхода нет — задать `IMPORT_HTTPS_PROXY`; прокси действует только на импорт и только при `IMPORT_ENABLED=true`, на webhook и остальное не влияет; стандартные `HTTP(S)_PROXY` игнорируются намеренно; на прокси нужно разрешить CONNECT к двум хостам провайдеров; логин и пароль прокси в URL — секрет, `.env` в репозиторий не кладётся; как проверить — кнопка «Загрузить сейчас» и экран «Состояние импорта».
   - Готово: техлид принял документ, QA прошёл его на чистой машине.
   - Зависимости: T087.
 - [ ] **T091 [P] [—] [backend] Руководство по интеграции.**
   - Файл: `docs/integration-guide.md` (RU): протокол `decisions` → вызов модели → `usage`; `http_status_hint`; эталонная схема с таймаутом 50 мс, fail-open и буфером; пример на `budget_client`; рекомендация закрыть прямой доступ к провайдерам.
+  - Коды отказов (14_tech_rulings.md, пакет 2, В1-2, В1-4): решение `subject_unknown` для ключа без подразделения — `policy_mode=enforce`, `fail_mode=DEFAULT_FAIL_MODE`, `department_id=null`; 422 у отчёта без решения — `subject_unknown`, `model_unknown`, `fx_rate_missing`; `getCallerBalance` без `login` у ключа не-service — 404 `subject_unknown`.
   - Готово: техлид принял документ.
   - Зависимости: T033.
 - [ ] **T089 [—] [qa] Релизный прогон и гейты.**
-  - Работа: `make test`, `make up`, `make smoke`, `make load`, `make failover`, `make check`, `make egress-host-check` (стенд QA), тест восстановления, установка по руководству.
+  - Работа: `make test` (на `bm_test`, без параллельных прогонов), `make up`, `make smoke`, `make load`, `make failover`, `make check`, `make egress-host-check` (стенд QA), тест восстановления, установка по руководству. `make egress-host-check` проводится при пустом `IMPORT_HTTPS_PROXY` и `IMPORT_ENABLED=false`.
   - Результат — `15_qa_report.md` (выход QA).
   - Готово: все гейты конституции зелёные.
   - Зависимости: все задачи, не урезанные решением на контрольной точке.

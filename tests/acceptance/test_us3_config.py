@@ -10,9 +10,9 @@
 
 Нумерация строк в сводке импорта: строка файла, заголовок — строка 1.
 Написаны до реализации (T041, T042). После T041/T042 пометка xfail снята с модуля и оставлена только
-у двух тестов (14_dev_backend.md, раздел «Backend 2»): `test_removed_employee_keeps_period_spend` ждёт
-`getDepartmentBalance` (T071), у `test_3_5_new_price_from_15th_old_events_unchanged` дефект теста — сессия
-админки (12 ч) истекает после `clock.set(15-е 10:00)`.
+у `test_removed_employee_keeps_period_spend` — ждёт `getDepartmentBalance` (T071). В
+`test_3_5_new_price_from_15th_old_events_unchanged` после `clock.set(15-е 10:00)` выполняется повторный вход:
+сессия админки живёт 12 ч.
 """
 
 import hashlib
@@ -29,6 +29,7 @@ import pytest
 from bm.clock import FrozenClock
 from tests.contract.helpers import assert_matches_contract
 from tests.fixtures.qa import (
+    ADMIN_PASSWORD,
     CYRILLIC,
     admin_client_login,
     balance,
@@ -363,11 +364,6 @@ async def test_3_4_model_added_and_assignable(
     assert d["outcome"] == "allow" and d["reserve_rub"] == "30.00"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=KeyError,
-    reason="дефект теста (QA): после clock.set(15-е 10:00) сессия админки старше 12 ч → 401 на listModelPrices",
-)
 async def test_3_5_new_price_from_15th_old_events_unchanged(
     client: httpx.AsyncClient, admin: dict[str, str], seed: Seed, db: asyncpg.Connection, clock: FrozenClock
 ) -> None:
@@ -397,6 +393,9 @@ async def test_3_5_new_price_from_15th_old_events_unchanged(
     new = await decide(client, key, decision_body(model="A"))
     assert new["reserve_rub"] == "60.00"
     assert (await call_record(db, old["decision_id"]))["fact_kop"] == 3000  # списанное не пересчитано
+    # Сессия админки живёт 12 ч (SESSION_TTL), а часы сдвинуты на 22 ч — входим заново.
+    relogin = await client.post("/api/v1/auth/login", json={"login": "root", "password": ADMIN_PASSWORD})
+    assert relogin.status_code == 200, relogin.text
     hist = await client.get("/api/v1/models/A/prices")
     assert_matches_contract(hist, "listModelPrices")
     froms = [x["valid_from"] for x in hist.json()["items"]]

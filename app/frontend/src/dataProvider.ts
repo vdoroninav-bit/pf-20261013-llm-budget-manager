@@ -88,6 +88,9 @@ export interface BmOperations {
   createModelPrice(modelId: Identifier, body: Schemas['ModelPriceCreate']): Promise<Schemas['ModelPrice']>;
   revokeCaller(callerId: Identifier): Promise<Schemas['Caller']>;
   importOrg(file: File, dryRun: boolean): Promise<Schemas['OrgImportSummary']>;
+  previewSubscription(body: Schemas['SubscriptionCreate']): Promise<Schemas['SubscriptionPreview']>;
+  endSubscription(subscriptionId: Identifier, endDate: string): Promise<Schemas['Subscription']>;
+  putFxRate(month: string, usdRub: string): Promise<Schemas['FxRate']>;
 }
 
 export type BmDataProvider = DataProvider & BmOperations;
@@ -137,6 +140,24 @@ export function createDataProvider(http: HttpClient): BmDataProvider {
       form.append('dry_run', String(dryRun));
       const { body } = await http.request<Schemas['OrgImportSummary']>('POST', '/org/import', { body: form });
       return required(body, 'importOrg');
+    },
+    async previewSubscription(subscription) {
+      const { body } = await http.request<Schemas['SubscriptionPreview']>('POST', '/subscriptions/preview', {
+        body: subscription,
+      });
+      return required(body, 'previewSubscription');
+    },
+    async endSubscription(subscriptionId, endDate) {
+      const patch: Schemas['SubscriptionPatch'] = { end_date: endDate };
+      const { body } = await http.request<Schemas['Subscription']>('PATCH', `/subscriptions/${seg(subscriptionId)}`, {
+        body: patch,
+      });
+      return required(body, 'endSubscription');
+    },
+    async putFxRate(month, usdRub) {
+      const put: Schemas['FxRatePut'] = { usd_rub: usdRub };
+      const { body } = await http.request<Schemas['FxRate']>('PUT', `/fx-rates/${seg(month)}`, { body: put });
+      return required(body, 'putFxRate');
     },
   };
 

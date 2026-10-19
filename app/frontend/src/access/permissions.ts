@@ -5,6 +5,7 @@ import type { Role } from '../api/types';
 const ALL: readonly Role[] = ['admin', 'budget_owner', 'finance_viewer'];
 const ADMIN: readonly Role[] = ['admin'];
 const ADMIN_OWNER: readonly Role[] = ['admin', 'budget_owner'];
+const ADMIN_FINANCE: readonly Role[] = ['admin', 'finance_viewer'];
 
 export const OPERATION_ROLES = {
   changePassword: ALL,
@@ -24,6 +25,14 @@ export const OPERATION_ROLES = {
   updateModel: ADMIN,
   listModelPrices: ALL,
   createModelPrice: ADMIN,
+  listFxRates: ADMIN_FINANCE,
+  putFxRate: ADMIN,
+  listSubscriptions: ALL,
+  getSubscription: ALL,
+  createSubscription: ADMIN,
+  previewSubscription: ADMIN,
+  endSubscription: ADMIN,
+  deleteSubscription: ADMIN,
   listProviderSources: ADMIN,
   listCallers: ADMIN,
   createCaller: ADMIN,

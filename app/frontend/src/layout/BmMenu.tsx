@@ -7,6 +7,7 @@ import MemoryIcon from '@mui/icons-material/Memory';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import KeyIcon from '@mui/icons-material/Key';
 import PeopleIcon from '@mui/icons-material/People';
+import CardMembershipIcon from '@mui/icons-material/CardMembership';
 import { Menu, useGetIdentity } from 'react-admin';
 import { can } from '../access/permissions';
 import type { BmIdentity } from '../authProvider';
@@ -31,6 +32,9 @@ export function BmMenu() {
           />
         )}
         {can(role, 'listModels') && <Menu.Item to="/models" primaryText={t.models} leftIcon={<MemoryIcon />} />}
+        {can(role, 'listSubscriptions') && (
+          <Menu.Item to="/subscriptions" primaryText={t.subscriptions} leftIcon={<CardMembershipIcon />} />
+        )}
         {can(role, 'importOrg') && (
           <Menu.Item to="/org-import" primaryText={t.org_import} leftIcon={<UploadFileIcon />} />
         )}

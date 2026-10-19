@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "starting_at": "2026-10-12T00:00:00Z",
+      "ending_at": "2026-10-13T00:00:00Z",
+      "results": [
+        {
+          "currency": "USD",
+          "amount": "500",
+          "workspace_id": "wrkspc_analytics",
+          "description": "Claude Sonnet 4.5 Usage - Input Tokens",
+          "cost_type": "tokens",
+          "context_window": "0-200k",
+          "model": "claude-sonnet-4-5",
+          "service_tier": "standard",
+          "token_type": "uncached_input_tokens"
+        }
+      ]
+    }
+  ],
+  "has_more": true,
+  "next_page": "page_qa_2"
+}

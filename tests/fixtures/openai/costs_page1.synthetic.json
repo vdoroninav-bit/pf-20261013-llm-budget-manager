@@ -1,0 +1,20 @@
+{
+  "object": "page",
+  "data": [
+    {
+      "object": "bucket",
+      "start_time": 1791763200,
+      "end_time": 1791849600,
+      "results": [
+        {
+          "object": "organization.costs.result",
+          "amount": {"value": 1.0, "currency": "usd"},
+          "line_item": "gpt-4o-2024-08-06, input",
+          "project_id": "proj_analytics"
+        }
+      ]
+    }
+  ],
+  "has_more": true,
+  "next_page": "page_qa_2"
+}

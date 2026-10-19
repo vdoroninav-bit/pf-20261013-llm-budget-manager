@@ -198,3 +198,100 @@ build exit 0
 1. Нужен ли axe (`axe-core`, MPL-2.0 — в белом списке) как dev-зависимость для автоматической проверки контраста и ARIA? 13_design.md §8 на него ссылается. Если да, добавлю в T072 вместе с проверкой панели.
 2. Подтвердите переименование ресурса `adminUsers` → `admin-users` (имя ресурса = маршрут из screens.md). Тогда в T052 так же сделаю `fxRates` → `fx-rates`.
 3. Для backend (T042), к сведению: экраны рассчитывают на `413 file_too_large` и `422` без `detail` у `importOrg`, на `409 last_admin` у `updateAdminUser`, на `422 invalid_credentials` у `changePassword`, а также на то, что `revealPseudonym` отвечает `EmployeeIdentity` с `display_name` или `null`. Всё это есть в контракте 1.0.2, правок контракта не требуется.
+
+---
+
+## 2026-10-19 — T052 «Подписки и курсы» (US4)
+
+**Итог:** T052 закрыта, в `12_tasks.md` стоит `[x]`. Результат проверки:
+- `npx vitest run`: 21 файл, **246/246** тестов (было 189). Три прогона подряд зелёные.
+- `tsc --noEmit`: exit 0.
+- `npm run build` вместе с `check-dist`: exit 0.
+
+Backend подписок (T051) ещё не готов. Экраны проверены против `contractApi`: каждый запрос и ответ сверяется с `12_openapi.yaml` 1.0.2, в каждом экранном тесте `violations = []`.
+
+### Что сделано
+
+| Экран (screens.md §5) | Файлы | Операции |
+|---|---|---|
+| 5.1 Список подписок. Фильтры: подразделение, «Действует на дату» (по умолчанию сегодня по МСК), «Все, включая закрытые». Чипы «Нет курса» и «Курс прошлого месяца», назначение словами | `src/resources/subscriptions/index.tsx`, `shared.tsx` | `listSubscriptions`, `listDepartments` |
+| 5.2 Ввод подписки с панелью «Доля бюджета»: дебаунс 400 мс, «Пересчитываем…», warn, «займут весь бюджет», `fx_warning`, «не распределять», ошибка предпросмотра не блокирует сохранение, `422 fx_rate_missing` | `SubscriptionCreate.tsx`, `SubscriptionPreviewPanel.tsx` | `previewSubscription`, `createSubscription`, `listDepartments`, `listEmployees` |
+| 5.3 Карточка: только чтение; у А — «Закрыть с даты» и «Закрыть сегодня» (с подтверждением и датой МСК). Слова «удалить» в интерфейсе нет | `index.tsx` | `getSubscription`, `endSubscription`, `deleteSubscription` |
+| 5.4 Курсы USD/₽: месяц словами, `92,5000 ₽ за 1 $`, «Ввести курс» с диалогом замены, предупреждение «Нет курса на октябрь 2026. Используется курс сентября.» | `src/resources/fxRates/index.tsx` | `listFxRates`, `putFxRate`, `listSubscriptions` |
+| Вкладки «Подписки» / «Курсы USD/₽» (`nav`, `aria-current`); пункт меню «Подписки и курсы» для всех трёх ролей | `shared.tsx`, `layout/BmMenu.tsx`, `App.tsx` | — |
+
+Общие части:
+- `src/budget/subscriptionShare.ts` — модуль для T052 и T072. `compareDecimal` сравнивает десятичные строки через `BigInt`, без float. `isBudgetTakenBySubscriptions` — признак по **В3**: подписки > 0 и ≥ лимита, сравнение в копейках. Ещё в модуле `formatPercent`, `sharePermille` (ширина шкалы в тысячных, целыми) и `previewSummary`.
+- `src/components/PeriodBudgetMeter.tsx` — вариант `compact` с одним сегментом подписок, `role="img"` и `aria-label` вида «Месяц: лимит 12 000,00 ₽, подписки 7 500,00 ₽». Полный вариант (остальные источники, отметка 80%, перерасход, легенда) — в T072.
+- `format/date.ts`: добавлены `formatDate`, `todayMsk`, `currentMonthMsk`, `formatMonth`, `monthLower`, `monthGenitive`, `previousMonth`. `format/money.ts`: добавлены `parseRateInput` (RateDecimal, до 4 знаков) и `formatRate`.
+- `dataProvider.ts`: добавлены `previewSubscription`, `endSubscription`, `putFxRate`. `access/permissions.ts`: добавлены 8 операций. Тест сверяет их с `x-roles`.
+- `resources/departmentNames.ts` — хук `useDepartmentNames` вынесен из `callers` и переиспользован.
+
+### Решения техлида (14_tech_rulings.md), применены
+
+- **Ф2:** ресурс переименован `fxRates` → `fx-rates` (имя ресурса совпадает с маршрутом), папка осталась `src/resources/fxRates/`. Ссылка «Ввести курс» из экранов моделей и подписок ведёт на работающий маршрут `#/fx-rates`.
+- **Ф1:** `axe-core` не добавлялся. Доступность проверяется так же, как в T043: роли, подписи, `aria-live`, фокус.
+
+### Проверка тестами (TDD)
+
+- До реализации: 4 новых или изменённых файла красные — нет модулей, нет пункта меню, неизвестный ресурс `fx-rates`.
+- После реализации: всё зелёное.
+- Мутационные проверки (вручную, изменения откатаны):
+  - дебаунс 0 мс вместо 400 → красный тест «предпросмотр через 400 мс»;
+  - признак «занят» по `share_pct ≥ 100` вместо сумм → 2 красных теста (В3, экранный и модульный);
+  - без отбрасывания устаревшего ответа предпросмотра → красный тест «опоздавший ответ не затирает новый»;
+  - `end_date: undefined` вместо `null` → красный тест: тело запроса не совпадает с контрактным.
+
+### Команды и вывод (сокращённо)
+
+```
+$ cd app/frontend && npx vitest run          # до реализации
+ FAIL subscriptionShare.test.ts (Cannot find module '../budget/subscriptionShare'), Failed Tests 28
+$ npx vitest run                             # × 3
+ Test Files  21 passed (21)
+      Tests  246 passed (246)
+$ npm run typecheck                          # exit 0
+$ npm run build
+dist/assets/index-*.js   1,202.91 kB │ gzip: 369.64 kB
+check-dist: внешних адресов нет (разрешённые namespace и тексты ошибок — см. scripts/check-dist.mjs).
+build exit 0
+$ npm --prefix app/frontend run test         # exit 0, 246/246
+```
+
+### Отклонения
+
+1. **«Займут весь бюджет» в предпросмотре считается по суммам, а не по `share_pct ≥ 100`.** В screens.md §5.2 условие для этой плашки записано через процент. Но процент округлён до 0,1, и при 99,95–99,99% сервер вернёт `100.0`, хотя вызовы ещё проходят. Это та же причина, по которой решение В3 перевело панель на суммы. Поэтому предпросмотр использует ту же функцию, что будет на панели (T072): `amortization_rub > 0` и `≥ limit_rub` хотя бы в одном периоде. Процент выводится только как текст. Тест: `share_pct "100.0"` при сумме на 1 ₽ меньше лимита плашку не показывает.
+2. **Период в тексте warn.** Из `SubscriptionPreview` не видно, какой период превысил порог. Поэтому в тексте «Подписки займут 62,5% месячного бюджета…» берётся период с наибольшей долей среди тех, где доля ≥ `warn_threshold_pct`. Если сервер вернул `warn = true`, а ни один процент порога не достиг (из-за округления), берётся просто наибольшая доля.
+3. **Признак «есть USD-позиции» для предупреждения на вкладке курсов** берётся из действующих подписок с `currency = USD` (`listSubscriptions?active_on=сегодня`, до 200 строк). В screens.md §5.4 это помечено как [Гипотеза]. Модели в USD не учитываются: для этого понадобился бы ещё и `listModels`. Предупреждение показывается, только если есть курс за прошлый месяц. Если курсов нет совсем, работает пустое состояние «Курсы не введены…».
+4. **Выбор сотрудника:** сначала «Подразделение сотрудника», затем «Сотрудник (псевдоним)» из `listEmployees?department_id=…`. В списке только активные сотрудники, первые 200 (`page_size` ≤ 200). Свободного поиска по псевдониму нет: у `listEmployees` нет параметра `q`. Для подразделений больше 200 человек нужен либо `q`, либо постраничная подгрузка. Сейчас это ограничение [Вывод: в выгрузке AD для пилота таких подразделений нет — не проверено].
+5. **Форма ввода сделана управляемой, без `SimpleForm` react-admin.** Предпросмотру нужно тело `SubscriptionCreate` на каждое изменение, и сохранение отправляет то же тело. Одно тело для двух запросов проверено тестом. Списки выбора — нативные `select` (роль `combobox`).
+6. **Маршрут `/subscriptions/:id`** (screens.md §5) открывает ту же карточку, что `/:id/show`: у подписки нет редактирования, поэтому `edit` ресурса — тоже карточка, как у сотрудников в T043.
+7. Пустое состояние у В и Ф: «Подписок нет.» Фильтр «Подразделение» владельцу бюджета не показывается, потому что сервер и так отдаёт ему только своё подразделение.
+8. Бандл вырос до 1 203 кБ (370 кБ gzip). Разделение на чанки по-прежнему отложено до окончания экранов T064/T072.
+
+### Изменённые и новые файлы (только `app/frontend/`)
+
+- Новые:
+  - `src/resources/subscriptions/{index,shared,SubscriptionCreate,SubscriptionPreviewPanel}.tsx`
+  - `src/resources/fxRates/index.tsx`
+  - `src/resources/departmentNames.ts`
+  - `src/budget/subscriptionShare.ts`
+  - `src/components/PeriodBudgetMeter.tsx`
+- Тесты:
+  - `src/__tests__/{subscriptions,fxRates}.test.tsx`, `subscriptionShare.test.ts`
+  - фикстуры `subscription`, `fxRate`, `subscriptionPreview` в `support/fixtures.ts`
+- Изменены:
+  - `src/App.tsx`, `src/layout/BmMenu.tsx`, `src/api/resources.ts`, `src/access/permissions.ts`, `src/dataProvider.ts`
+  - `src/format/{date,money}.ts`, `src/i18n/ru.ts`, `src/resources/callers/index.tsx` (импорт хука)
+  - тесты `access.test.tsx` (меню), `dataProvider.test.ts` (`fx-rates`)
+
+### Вопросы техлиду
+
+1. Принять отклонение 1: «займут весь бюджет» в предпросмотре по суммам (В3), а не по `share_pct ≥ 100`, как записано в screens.md §5.2. Если принимаете — дизайнеру нужна правка строки в §5.2.
+2. Для backend T051, к сведению. Экраны рассчитывают на следующее:
+   - `previewSubscription` принимает `end_date: null` и `assignee.ref: null` для `unallocated`;
+   - ответ `422` в `errors[].field` использует имена `provider`, `plan`, `seat_price`, `seats`, `start_date`, `end_date`, `assignee.ref`;
+   - `deleteSubscription` отвечает `204`.
+
+   Всё это есть в контракте 1.0.2.
+3. Нужен ли `q` у `listEmployees` (отклонение 4)? Это правка контракта, не v1-критично.

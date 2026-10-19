@@ -20,6 +20,8 @@ import { DepartmentCreate, DepartmentEdit, DepartmentList, DepartmentShow } from
 import { EmployeeCard } from './resources/employees';
 import { ModelCreate, ModelEdit, ModelList, ModelShow } from './resources/models';
 import { CallerCreate, CallerEdit, CallerList } from './resources/callers';
+import { SubscriptionCreate, SubscriptionList, SubscriptionShow } from './resources/subscriptions';
+import { FxRateList } from './resources/fxRates';
 import { AdminUserCreate, AdminUserEdit, AdminUserList } from './resources/adminUsers';
 import { darkTheme, lightTheme } from './theme/muiTheme';
 import { createThemeStore } from './theme/themeStore';
@@ -98,6 +100,20 @@ function resourcesFor(role: Role | null) {
       edit={can(role, 'updateModel') ? ModelEdit : undefined}
       create={can(role, 'createModel') ? ModelCreate : undefined}
     />,
+    can(role, 'listSubscriptions') ? (
+      <Resource
+        key="subscriptions"
+        name="subscriptions"
+        list={SubscriptionList}
+        show={SubscriptionShow}
+        // Маршрут карточки по screens.md §5 — /subscriptions/:id; редактирования у подписки нет, там та же карточка.
+        edit={SubscriptionShow}
+        create={can(role, 'createSubscription') ? SubscriptionCreate : undefined}
+        recordRepresentation="plan"
+      />
+    ) : null,
+    // Имя ресурса = маршрут экрана (screens.md §5: /admin/#/fx-rates).
+    can(role, 'listFxRates') ? <Resource key="fx-rates" name="fx-rates" list={FxRateList} /> : null,
     can(role, 'listCallers') ? (
       <Resource key="callers" name="callers" list={CallerList} create={CallerCreate} edit={CallerEdit} recordRepresentation="name" />
     ) : null,

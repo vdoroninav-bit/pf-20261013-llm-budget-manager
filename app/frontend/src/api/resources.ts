@@ -58,7 +58,8 @@ export const RESOURCES = {
     create: true,
     update: true,
   }),
-  fxRates: r({
+  // Имя ресурса = маршрут экрана (design/screens.md §5: /admin/#/fx-rates), как у admin-users.
+  'fx-rates': r({
     path: 'fx-rates',
     key: 'month',
     list: { paginated: false, sortable: false, filters: [] },

@@ -1,0 +1,17 @@
+[project]
+name = "budget-client"
+version = "0.1.0"
+description = "Эталонный клиент LLM Budget Manager: таймаут 50 мс, fail-open/fail-closed, буфер отчётов SQLite"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "LicenseRef-Proprietary"
+# Только стандартная библиотека Python: http.client, sqlite3, json, threading.
+# Нет сторонних зависимостей — нечего проверять по белому списку лицензий, нет транзитивной телеметрии.
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]  # MIT; нужен только для сборки wheel
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["budget_client"]

@@ -35,3 +35,55 @@ export function formatInt(n: number | null | undefined): string {
   if (n === null || n === undefined) return '—';
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 }
+
+const MONTHS = [
+  'январь', 'февраль', 'март', 'апрель', 'май', 'июнь',
+  'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь',
+] as const;
+const MONTHS_GENITIVE = [
+  'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+] as const;
+
+/** Дата контракта (format: date) «2026-10-01» → «01.10.2026». Без Date: дата не сдвигается часовым поясом. */
+export function formatDate(date: string | null | undefined): string {
+  if (!date) return '—';
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : date;
+}
+
+const mskDate = new Intl.DateTimeFormat('en-CA', { timeZone: MSK, year: 'numeric', month: '2-digit', day: '2-digit' });
+
+/** Сегодняшняя дата по МСК в формате контракта: «2026-10-14». */
+export function todayMsk(now: Date = new Date()): string {
+  return mskDate.format(now);
+}
+
+/** Текущий месяц по МСК: «2026-10». */
+export const currentMonthMsk = (now: Date = new Date()) => todayMsk(now).slice(0, 7);
+
+const monthIndex = (month: string) => Number(month.slice(5, 7)) - 1;
+
+/** «2026-10» → «Октябрь 2026». */
+export function formatMonth(month: string): string {
+  const lower = monthLower(month);
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
+
+/** «2026-10» → «октябрь 2026» (для «на октябрь 2026», «за октябрь 2026»). */
+export function monthLower(month: string): string {
+  const name = MONTHS[monthIndex(month)];
+  return name ? `${name} ${month.slice(0, 4)}` : month;
+}
+
+/** «2026-09» → «сентября» (для «курс сентября»). */
+export function monthGenitive(month: string): string {
+  return MONTHS_GENITIVE[monthIndex(month)] ?? month;
+}
+
+/** «2026-01» → «2025-12». */
+export function previousMonth(month: string): string {
+  const y = Number(month.slice(0, 4));
+  const m = Number(month.slice(5, 7));
+  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+}
