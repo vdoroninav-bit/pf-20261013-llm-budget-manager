@@ -7,7 +7,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
 **Вход**: `12_plan.md` (обязателен), `10_tech_spec.md` (сценарии US1–US7), `12_openapi.yaml` (контракт), `12_arch_decision.md` §4.5 (алгоритм решения), `10_constitution.md`.
 **Старт**: только после записи «согласен» в `12_arch_decision.md` → «Согласование» и после прохождения Г1 (вопрос 2 в APPROVAL).
 **Исполнители**: AI-агенты, каждая задача делается за один проход. Поэтому у каждой задачи указаны точные файлы, зависимости и команда, которая доказывает готовность. Задача закрыта, только когда к ней приложен вывод этой команды (принцип VII).
-**Решения техлида по ходу разработки**: `13_design_rulings.md` (дизайн, контракт 1.0.1), `14_tech_rulings.md` (вопросы backend и frontend, контракт 1.0.2; пакет 2 — без правок контракта). Пометка «(14_tech_rulings.md, Б…/Ф…)» у пункта задачи означает, что пункт добавлен этим решением.
+**Решения техлида по ходу разработки**: `13_design_rulings.md` (дизайн, контракт 1.0.1), `14_tech_rulings.md` (вопросы backend и frontend, контракт 1.0.2; пакеты 2 и 3 — без правок контракта), `14_checkpoint_week5.md` (контрольная точка недели 5). Пометка «(14_tech_rulings.md, Б…/Ф…)» у пункта задачи означает, что пункт добавлен этим решением; коды пакета 3 начинаются с цифры 3 (3Б…, 3Ф…, 3Д…).
 **Тестовые БД** (14_tech_rulings.md, пакет 2, Q8): у каждого исполнителя своя БД на локальном PostgreSQL — `bm_test_b1`, `bm_test_b2`, `bm_test_fe`, `bm_test_qa`, `bm_test_devops` (`CREATE DATABASE … OWNER bm`). Вывод команды готовности, полученный на своей БД, принимается. `bm_test` — только для прогона оркестратора и релизного прогона T089, без параллельных запусков.
 
 ## Формат: `[ID] [P?] [Story] [роль] Описание`
@@ -17,27 +17,31 @@ description: "Задачи LLM Budget Manager v1 по ролям"
 - **Роли**: designer, backend, frontend, ml, devops, qa. **ml: задач нет** (`ML_REQUIRED: no`, ADR-001).
 - **TDD**: задача qa с тестами сценария всегда идёт раньше задачи backend/frontend с реализацией. Тесты сначала падают, это фиксируется выводом `pytest` в описании PR.
 - **Урезание** (принцип VIII, порядок фиксирован): 🔻1 — MCP (T080–T081), 🔻2 — webhook (T073), 🔻3 — коннектор OpenAI (T063).
+- **Итог контрольной точки недели 5** (`14_checkpoint_week5.md`, 2026-10-21): **🔻1 применён** — T080 и T081 в v1 не делаются. 🔻2 и 🔻3 не применены: webhook и коннектор OpenAI остаются в v1. Если T073 не закрыта к началу T089, применяется 🔻2.
 
 ## Сводка по ролям и оценке (чел.-нед, `12_arch_decision.md` §5.1)
 
 | Роль | Задачи | Оценка |
 |---|---|---|
 | designer | T003 | 0,3 |
-| backend | T010–T019, T021, T031, T033, T041, T042, T051, T061–T063, T071, T073, T081, T091 | 11,5 (из них 🔻 0,6 + 0,2 + 0,4) |
-| frontend | T002, T043, T052, T064, T072 | 2,5 |
-| devops | T001, T087, T088, T090 | 1,0 |
-| qa | T020, T030, T032, T040, T050, T060, T070, T080, T086, T089 | 1,5 |
+| backend | T010–T019, T021, T031, T033, T041, T042, T051, T061–T063, T071, T073, ~~T081~~ (урезана), T091 | 11,5 (из них 🔻 0,6 + 0,2 + 0,4; 🔻1 = 0,4 урезан) |
+| frontend | T002, T043, T052, T064, T072, T095 | 2,5 |
+| devops | T001, T087, T088, T090, T092 | 1,0 |
+| qa | T020, T030, T032, T040, T050, T060, T070, ~~T080~~ (урезана), T086, T089, T093 | 1,5 |
 | ml | — | 0 |
 | техлид | ревью, приёмка, контрольная точка недели 5 (вне списка задач) | 1,5 |
+
+T092, T093 и T095 оценку не меняют. T092 и T093 переносят проверки поставки из Docker в CI и на стек из локальных процессов, T095 — доводка в рамках строки frontend (`14_checkpoint_week5.md` §3) [Вывод].
 
 ---
 
 ## Phase 1: Setup
 
-- [ ] **T001 [—] [devops] Каркас репозитория и команд.**
+- [x] **T001 [—] [devops] Каркас репозитория и команд.**
   - Файлы: `Makefile`, `app/backend/pyproject.toml`, `app/backend/uv.lock`, `app/backend/importlinter.ini`, `app/backend/bm/__init__.py`, `deploy/docker-compose.test.yml` (сервисы `postgres-test` и `tests`), `deploy/Dockerfile` (стадия `python-runtime`), `deploy/.env.example` (все переменные из `12_plan.md` §8), `tests/conftest.py` (пустые фикстуры), `.gitignore` (`.env`, `node_modules`, `__pycache__`).
-  - Версии: Python 3.13, FastAPI 0.143.0, asyncpg 0.32.0, mcp 2.3.0 (опционально, extra `mcp`). Остальные зависимости фиксируются lock-файлом.
+  - Версии: Python 3.13, FastAPI 0.143.0, asyncpg 0.32.0, mcp 2.3.0 (опционально, extra `mcp`). Остальные зависимости фиксируются lock-файлом. *(Extra `mcp` удаляется в T087 после урезания 🔻1 — 14_tech_rulings.md, 3К.)*
   - Готово: `make test` проходит с 0 тестов и exit 0; `make test-unit` проходит с exit 0.
+  - Закрыта техлидом по выводу в `14_devops.md` (14_tech_rulings.md, пакет 3, 3Т). Отклонение «`make test` на локальном PostgreSQL, контейнер — `make test-docker`» принято.
   - Зависимости: —.
 - [x] **T002 [P] [—] [frontend] Каркас админки.**
   - Файлы: `app/frontend/{package.json, package-lock.json, vite.config.ts, tsconfig.json, index.html}`, `src/main.tsx`, `src/App.tsx`, `src/api/schema.d.ts` (команда `npm run gen:api` = `openapi-typescript ../../12_openapi.yaml`), `src/authProvider.ts` (`/api/v1/auth/login|logout|me`, CSRF из ответа login в заголовок `X-CSRF-Token`), `src/dataProvider.ts` (списки `{items,total}`, `page`, `page_size`, `sort`, `order`), `src/i18n/ru.ts`, `scripts/check-dist.mjs`.
@@ -45,10 +49,11 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Тест: `src/__tests__/dataProvider.test.ts` проверяет преобразование `getList` в запрос и обратно; `src/__tests__/checkDist.test.ts`; тест «не отправляет телеметрию react-admin» в `App.test.tsx`.
   - Готово: `npm --prefix app/frontend run test && npm --prefix app/frontend run build` дают exit 0; шаг `build` включает `scripts/check-dist.mjs`, который падает на любом `http(s)://` или `//host` в `index.html` и CSS и на любом адресе в JS вне белого списка (XML-namespace, `http://localhost` как база `new URL()`, адреса в текстах ошибок react/mui/react-router, адрес телеметрии ra-core — только пока действует тест на `disableTelemetry`). Критерий изменён решением техлида (14_tech_rulings.md, Ф1): пустой `grep -rE "https?://" dist` недостижим без правки кода react-dom.
   - Зависимости: T001.
-- [ ] **T003 [P] [—] [designer] Минимальные макеты и токены.**
+- [x] **T003 [P] [—] [designer] Минимальные макеты и токены.**
   - Файлы: `design/tokens.json` (цвета, отступы, системный стек шрифтов), `design/screens.md`.
   - Содержание `screens.md`: 8 экранов — Вход; Панель подразделения (лимиты, расход по источникам, резервы, остаток, дата сброса, разбивка по моделям); Подразделения и лимиты; Каталог моделей и история цен; Подписки с предпросмотром доли; Загрузка AD-файла со сводкой; Импорт провайдеров и «Состояние»; Отчёты, CSV и сверка. Для каждого экрана — поля, подписи на русском, пустые и ошибочные состояния, видимость по ролям.
   - Готово: техлид принял `screens.md` (чек-лист: у каждого FR-027…FR-031 есть экран).
+  - Принята техлидом 2026-10-21 (14_tech_rulings.md, пакет 3, 3Т): экраны §1–8 и вспомогательные §9–11, матрица FR → экран покрывает FR-027…FR-031. Остались правки текста дизайнером: §5.2 (3Ф1) и §11 (3Ф5).
   - Зависимости: —.
 
 ---
@@ -68,6 +73,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - `bounds(MONTH, 2026-10-31 23:59:59+03:00).resets_at == 2026-11-01T00:00+03:00`;
     - результат не зависит от `TZ` процесса (`monkeypatch.setenv("TZ","UTC")` и `time.tzset()`).
   - Готово: `pytest tests/unit/test_money.py tests/unit/test_periods.py` — тесты FAIL с ImportError.
+  - Не закрыта (14_tech_rulings.md, пакет 3, 3Т): вывода красной фазы нет ни в одном отчёте. Чтобы закрыть, Backend 1 прикладывает: вывод `pytest -v` четырёх файлов T010–T012 с сопоставлением обязательных случаев и имён тестов, и мутационную проверку на временной копии (`ROUND_HALF_UP` → `ROUND_HALF_EVEN`; границы периодов по `TZ` процесса) — каждая мутация даёт красный тест.
   - Зависимости: T001.
 - [ ] **T011 [P] [US4] [backend] Тесты `amortize`.**
   - Файл: `tests/unit/test_amortize.py`.
@@ -77,6 +83,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - старт 15-го и окончание 20-го;
     - `test_week_across_months_two_fx` — неделя 28.09–04.10 с разными M в сентябре и октябре.
   - Готово: тесты FAIL.
+  - Не закрыта (пакет 3, 3Т): то же, что T010; мутация — накопительное округление заменено округлением по периодам (24 193 → 24 194) даёт красный тест.
   - Зависимости: T001.
 - [ ] **T012 [P] [US1] [backend] Табличные тесты `select()`.**
   - Файл: `tests/unit/test_select.py`.
@@ -92,15 +99,18 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - `observe` + модель не разрешена → `allow` с `observed_violation=model_not_allowed`;
     - пустой `allowed` → `deny model_not_allowed` при `enforce`.
   - Готово: тесты FAIL.
+  - Не закрыта (пакет 3, 3Т): то же, что T010; мутация — `tie_order` игнорируется — даёт красный тест.
   - Зависимости: T001.
-- [ ] **T013 [—] [backend] Чистые функции домена.**
+- [x] **T013 [—] [backend] Чистые функции домена.**
   - Файлы: `app/backend/bm/domain/{types.py, money.py, periods.py, amortize.py, select.py, codes.py}`.
   - Сигнатуры — `12_plan.md` §6, алгоритм — `12_arch_decision.md` §4.5. Ввода-вывода нет, `float` не используется.
   - Готово: `pytest tests/unit -q` проходит полностью.
+  - Закрыта техлидом (пакет 3, 3Т): `tests/unit` входит в `make test` (`run-tests.sh full`), прогон оркестратора 2026-10-21 — 583 passed, 0 failed; import-linter «bm.domain не зависит от ввода-вывода» — KEPT.
   - Зависимости: T010, T011, T012.
-- [ ] **T014 [—] [backend] Схема БД, раннер миграций, фикстуры.**
+- [x] **T014 [—] [backend] Схема БД, раннер миграций, фикстуры.**
   - Файлы: `bm/db/migrate.py`, `bm/db/migrations/0001_init.sql` (все таблицы из `12_plan.md` §7, партиции `call_record` на текущий и следующий месяц, `REVOKE UPDATE, DELETE ON audit_log`), `tests/conftest.py` (фикстуры `db` — чистая схема на тест, `clock` — `FrozenClock`, `seed`), `tests/fixtures/seed.py` (построитель: подразделение, сотрудник, модель с ценой, лимиты, ключ — прямыми INSERT), `tests/integration/test_migrations.py`.
   - Готово: `make test` проходит; `test_migrations` проверяет наличие таблиц и запрет UPDATE на `audit_log`.
+  - Закрыта техлидом (пакет 3, 3Т): `make test` зелёный во всех отчётах с 2026-10-14; в `test_migrations` есть `test_all_tables_exist`, `test_audit_log_insert_allowed_update_delete_forbidden`, `test_audit_log_privileges_revoked_for_owner`.
   - Зависимости: T001.
 - [x] **T015 [—] [backend] Каркас приложения и контрактный тест.**
   - Файлы: `bm/settings.py`, `bm/main.py` (`create_app`), `bm/http/errors.py` (`application/problem+json`, `detail` на русском), `bm/http/routers/system.py` (`/healthz`, `/readyz`, `/metrics`), `tests/contract/test_openapi_contract.py`.
@@ -189,6 +199,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - SC-002: стек поднят (`make up`), 2 подразделения (`open` и `closed`); `docker compose stop api worker postgres` под потоком 20 rps на 60 с → 100% вызовов `open` проходят, 100% `closed` получают `PolicyUnavailable`; после `start` и `flush()` все `report_id` есть в БД ровно один раз.
   - SC-003: `docker kill api` под нагрузкой; каждый ответ 200 на `/usage` есть в БД.
   - Готово: тесты FAIL (клиента нет).
+  - Запуск на стеке из локальных процессов — T093 (14_tech_rulings.md, пакет 3, 3Д1).
   - Зависимости: T030.
 - [x] **T033 [US1] [backend] Эталонный клиент `budget_client`.**
   - Файлы: `app/client/budget_client/{pyproject.toml, budget_client/client.py, buffer.py, config_cache.py}`, `tests/unit/test_client_buffer.py`.
@@ -242,6 +253,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Зависимости: T002, T003.
 
 **Контрольная точка — неделя 5 (техлид).** US1–US3 зелёные, `make up && make smoke` проходит после T087. Факт по трудоёмкости сравнивается с планом (11,0 чел.-нед к этому моменту). Если прогноз выше рамки, применяется урезание 🔻1 → 🔻2 → 🔻3. Если урезания не хватает — стоп и решение заказчика (SC-013). Порог: 4,0 чел.-мес, или 4,17 чел.-мес (2 млн ₽), если заказчик выбрал вариант 1А.
+**Итог (2026-10-21, `14_checkpoint_week5.md`):** US1–US3 зелёные. `make up && make smoke` не выполнены: реестры образов закрыты, порядок подтверждения поставки — 14_tech_rulings.md, 3Д1–3Д2. Прогноз с webhook — 4,13 чел.-мес, в рамке; с MCP — 4,23, выше порога. Применён 🔻1 (MCP).
 
 ---
 
@@ -267,10 +279,12 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Файлы: `bm/http/routers/subscriptions.py` (5 операций), `bm/budget/service.py` (амортизация в `balance` и `decide` через `subscription_month`), `bm/worker/jobs.py` (задача на 1-е число 00:05 МСК: материализовать `subscription_month`, проверить долю подписок).
   - Правила: денежные поля подписки неизменяемы, их защищает триггер из T014. M месяца берётся только из материализованной `subscription_month` — на это опирается тест QA «подписки ≥ 100%» (14_tech_rulings.md, пакет 2, QA7).
   - Готово: `pytest tests/acceptance/test_us4_subscriptions.py` и `make test`; снят точечный `xfail(T051)` с `test_subscriptions_over_100_percent_block_paid_calls`.
+  - Подтверждено (14_tech_rulings.md, пакет 3, 3Б1–3Б3): доля подписок считается за весь период; `endSubscription` датой в прошлом и повторное открытие — 422; «не распределено» в отчёте — по прошедшим дням.
   - Зависимости: T031, T019, T050.
 - [x] **T052 [P] [US4] [frontend] Подписки и курсы.**
   - Файлы: `src/resources/subscriptions/*` (форма с живым предпросмотром `previewSubscription`, предупреждение при доле ≥ порога), `src/resources/fxRates/*` (имя ресурса react-admin — `fx-rates`, совпадает с маршрутом `#/fx-rates`, на который уже ведёт ссылка «Ввести курс»; 14_tech_rulings.md, пакет 2, Ф2), тесты.
   - Готово: `npm --prefix app/frontend run test`.
+  - Доводка — T095 (пакет 3, 3Ф2): список сотрудников в форме загружается всеми страницами.
   - Зависимости: T043.
 
 ---
@@ -293,8 +307,10 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - Anthropic с `kind≠workspace` → `422 unsupported_source_kind`;
     - ключ уведомлений без периода (14_tech_rulings.md, Б5): `import_failure` и `import_unallocated` — `department_id=NULL`, `period=NULL`, `period_start` = дата МСК, когда обнаружено условие (не больше одного уведомления каждого вида в сутки); `create_once` отклоняет `period_start=None` (`ValueError`), тест на это.
   - Готово: тесты T060 на `RecordedSource` проходят, `make test` зелёный.
+  - Дефект против FR-031 (14_tech_rulings.md, пакет 3, 3Б6): изменения справочника источников не пишутся в аудит. Исправляется первым шагом T062; T061 не переоткрывается.
   - Зависимости: T017, T019, T060.
 - [ ] **T062 [P] [US5] [backend] Коннектор Anthropic.**
+  - Первый шаг (14_tech_rulings.md, пакет 3, 3Б6): `createProviderSource`, `updateProviderSource`, `deleteProviderSource` идут через `config.apply` (аудит «было/стало», `config_version`); снят точечный `xfail` с `tests/acceptance/test_us6_reports_roles.py::test_6_5_audit_records_who_when_before_after`. Без этого T062 не закрывается.
   - Файлы: `bm/provider_import/sources/anthropic.py`, `tests/integration/test_anthropic_source.py`; для прокси — `bm/egress/client.py`, `bm/settings.py`, `tests/security/test_no_egress.py`.
   - Работа: `cost_report` с шагом `1d`, группировка по `workspace_id` и `description`, пагинация, сумма в USD; модель извлекается из `description`. Ключ берётся только из `ANTHROPIC_ADMIN_KEY(_FILE)`, HTTP-клиент — только через `egress`. В тестах вместо сети — транспорт httpx с фикстурами.
   - Прокси для импорта (решение заказчика по Б4 — «сделайте оба»; 14_tech_rulings.md, пакет 2, Б4):
@@ -307,6 +323,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Готово: `make test`.
   - Зависимости: T061.
 - [ ] **T063 [P] [US5] [backend] 🔻3 Коннектор OpenAI.**
+  - Остаётся в v1 (контрольная точка недели 5, `14_checkpoint_week5.md`).
   - Файлы: `bm/provider_import/sources/openai.py`, `tests/integration/test_openai_source.py`.
   - Работа: `GET /organization/costs`, `bucket_width=1d`, `group_by=project_id,line_item`, пагинация. Названия полей сумм сверяются с фикстурами спайка.
   - Прокси (14_tech_rulings.md, пакет 2, Б4): клиент берётся только из `egress("openai")`, поэтому `IMPORT_HTTPS_PROXY` применяется автоматически; своей настройки прокси в коннекторе нет. Тест: при заданном прокси он есть у клиента `openai`. Настройка прокси сделана в T062 и остаётся, даже если T063 урезана.
@@ -353,20 +370,25 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Готово: `npm --prefix app/frontend run test && npm --prefix app/frontend run build`.
   - Зависимости: T043.
 - [ ] **T073 [US6] [backend] 🔻2 Webhook-канал.**
+  - **Входит в v1** (контрольная точка недели 5, `14_checkpoint_week5.md`). Если к началу T089 задача не закрыта с выводом команды готовности, применяется 🔻2: `WEBHOOK_URL` игнорируется, уведомления создаются с `webhook_status=disabled`, ветка `pending` удаляется.
+  - Первый шаг (14_tech_rulings.md, пакет 3, 3Б7): время записи аудита берётся из `Clock` приложения во всех местах записи (`config.apply`, `forbidden_access`, вход, `reveal_pseudonym`, импорт AD); `DEFAULT now()` у колонки остаётся. Тест: под `FrozenClock` запись видна в `listAudit` за замороженный интервал, `at` равно замороженному времени.
   - Файлы: `bm/notify/channels.py` (`Webhook` через `egress("webhook")`, повтор 3 раза, `webhook_status`), `tests/integration/test_webhook.py` (локальный HTTP-сервер на 127.0.0.1).
+  - Уточнение (пакет 3): при заданном `WEBHOOK_URL` статус `pending` получают уведомления **всех** видов, не только созданные задачей порогов (сейчас `subs_share` и уведомления импорта создаются с `disabled`). Доставка — задачей worker: `pending` → `delivered` или → `failed` после 3 неудачных попыток. В теле запроса — JSON с полями `id`, `kind`, `department_id`, `period`, `period_start`, `message`, `created_at`, без идентификаторов сотрудников. Формат описывается в `docs/admin-guide.md` (T090). Тесты: доставка; 3 неудачи → `failed`; `WEBHOOK_URL` пуст → `disabled` и 0 соединений; публичный адрес → отказ `egress`.
   - Готово: `make test`.
   - Зависимости: T071.
 
 ---
 
-## Phase 9: US7 — MCP (P3) 🔻1
+## Phase 9: US7 — MCP (P3) 🔻1 — УРЕЗАНО
 
-- [ ] **T080 [US7] [qa] Тест эквивалентности HTTP и MCP.** Тест пишется до реализации.
+**Урезано на контрольной точке недели 5** (`14_checkpoint_week5.md`): прогноз с MCP — 4,23 чел.-мес / 2,03 млн ₽, выше порога SC-013. В v1 задачи не делаются, T089 их не ждёт. Вернуть — только решением заказчика (там же, п. 5).
+
+- [ ] **T080 [US7] [qa] Тест эквивалентности HTTP и MCP.** **🔻1 УРЕЗАНА — в v1 не делается.** Тест пишется до реализации.
   - Файл: `tests/acceptance/test_us7_mcp.py`.
   - Покрытие: сценарии 1.1–1.4 и 2.1 параметризуются по адаптеру (`http`, `mcp`); результаты совпадают поле в поле, кроме `decision_id` и `created_at`. Без ключа → ошибка `unauthorized`.
   - Готово: тест FAIL.
   - Зависимости: T031.
-- [ ] **T081 [US7] [backend] MCP-сервер.**
+- [ ] **T081 [US7] [backend] MCP-сервер.** **🔻1 УРЕЗАНА — в v1 не делается.**
   - Файл: `bm/mcp/server.py` — mcp 2.3, Streamable HTTP, монтирование в `create_app` на `/mcp`, инструменты `request_decision`, `report_usage`, `get_balance` поверх `Budget`, тот же `X-Api-Key` и `subject_scope`.
   - Готово: `pytest tests/acceptance/test_us7_mcp.py` и `make test`.
   - Зависимости: T080.
@@ -375,39 +397,79 @@ description: "Задачи LLM Budget Manager v1 по ролям"
 
 ## Phase 10: Поставка и сквозные проверки
 
+**Среда разработки** (14_tech_rulings.md, пакет 3, 3Д1–3Д2): реестры образов закрыты (403). Поставка подтверждается статически, в CI (T092, с журналом прогона) и на стеке из локальных процессов (T087, T093). Каждый гейт получает статус PASS / PASS-замена / НЕ ПРОВЕРЕНО / FAIL.
+
 - [ ] **T086 [P] [—] [qa] Нагрузочный тест SC-001 и SC-004.**
   - Файлы: `tests/load/{targets.py, run_load.sh}`, цель `make load`.
   - Работа: генерация целей vegeta для 1 000 сотрудников и 30 моделей; 50 rps × 10 мин; p95 и p99 берутся из гистограммы `/metrics` и из отчёта vegeta; граница лимита: факт = оценка × 1,1, перерасход ≤ 2%.
-  - Готово: `make up && make load` печатает PASS и значения p95/p99.
+  - В этой среде (пакет 3, 3Д1): прогон идёт на стеке из локальных процессов (`make up-local`). Если vegeta получить нельзя, нагрузку даёт генератор на `httpx` (уже есть в dev-зависимостях) с фиксированной частотой; p95/p99 берутся из `/metrics`, в отчёте указано «vegeta не использован». Числа помечаются «среда разработки, не эталонный стенд», статус гейта SC-001 — PASS-замена.
+  - Готово: `make up && make load` печатает PASS и значения p95/p99 (здесь — `make up-local && make load`).
   - Зависимости: T031, T087.
 - [ ] **T087 [—] [devops] Полная поставка.**
   - Файлы: `deploy/docker-compose.yml` (сервисы `api`, `worker`, `postgres:18`, `backup`; сети `core` с `internal: true` для `postgres` и `backup`, `edge` для `api` и `worker`; healthcheck; `restart: unless-stopped`; порт `${BIND_ADDR}:${API_PORT}:8080`; секреты через `*_FILE`), `deploy/Dockerfile` (стадия node собирает SPA, стадия python копирует `dist` в `/app/static/admin`), `deploy/backup/{backup.sh, restore.sh}`, `tests/smoke/test_smoke.py` (тест пишется первым).
   - Дополнительно (14_tech_rulings.md, Б2, Б6): `SESSION_COOKIE_SECURE=false` с комментарием в `deploy/.env.example` («true — если админка открыта через HTTPS»); у `api` — `PROMETHEUS_MULTIPROC_DIR` на `tmpfs`, каталог очищается при старте контейнера. Каталог только у `api`, с `worker` не делится (пакет 2, В1-6).
   - Дополнительно (14_tech_rulings.md, пакет 2, Б4): `IMPORT_HTTPS_PROXY=` (пусто) в `deploy/.env.example` с комментарием «пусто — прямой выход к API провайдеров; задайте `http(s)://хост:порт`, если выход только через корпоративный прокси; действует только на импорт расхода при `IMPORT_ENABLED=true`, стандартные HTTP(S)_PROXY утилита игнорирует». Переменная передаётся тем сервисам, которые запускают импорт (`worker`, а также `api`, если кнопка «Загрузить сейчас» выполняет импорт в процессе `api`).
   - Дополнительно (пакет 2, QA6): пользователь и БД PostgreSQL в контейнере — `bm` / `bm`; значения `BM_ADMIN_LOGIN` / `BM_ADMIN_PASSWORD` для отказных тестов по умолчанию берутся из `ADMIN_INITIAL_*`.
-  - Цели Makefile: `up`, `down`, `smoke`, `backup`, `restore`.
+  - Дополнительно (пакет 3, 3К, 3Б9, 3Д1):
+    - extra `mcp` удаляется из `app/backend/pyproject.toml` и `uv.lock`, вместе с комментарием `UV_EXTRAS` в `deploy/Dockerfile`;
+    - `app/client` добавляется в пути `ruff` целей `lint` и `fmt`;
+    - статическая проверка: `docker compose -f deploy/docker-compose.yml config --quiet` и `tests/deploy/test_compose_static.py` (перечень требований — 3Д1(а));
+    - стек из локальных процессов: `deploy/local/stack.sh` и цели `up-local`, `down-local`. Свой кластер PostgreSQL на отдельном порту, `api` с 2 воркерами, `worker`, pid-файлы, команды `stop`/`start`/`kill` по сервисам. Общий кластер на 5432 не останавливать никогда;
+    - в `tests/smoke` проверки, которые есть только у образа, помечаются `compose_only`.
+  - Цели Makefile: `up`, `down`, `smoke`, `backup`, `restore`; дополнительно `up-local`, `down-local`.
   - Готово: `make up && make smoke && make backup && make restore && make smoke`; время от `git clone` до первого решения ≤ 30 мин по `docs/admin-guide.md` (SC-009, замер QA).
+  - Готово в этой среде (пакет 3, 3Д1–3Д2):
+    - здесь: `docker compose config --quiet` (exit 0); `tests/deploy/test_compose_static.py`; `make up-local && make smoke && make backup && make restore && make smoke` (backup/restore — против локального кластера);
+    - в CI (T092): та же цепочка в Docker с журналом прогона для того же SHA.
+    - `[x]` ставится только при наличии журнала CI. Без него задача остаётся `[ ]` со статусом «проверено локально», а сборка образа и стек в Docker уходят в `16_release.md` как НЕ ПРОВЕРЕНО.
   - Зависимости: T031, T043.
 - [ ] **T088 [P] [—] [devops] SDL-проверки.**
   - Файлы: `deploy/ci/check.sh`, `deploy/ci/licenses-allow.txt` (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, PostgreSQL, PSF-2.0, 0BSD, Python-2.0), цели `check` и `egress-host-check`.
   - Работа: CycloneDX SBOM для Python и npm, pip-audit, npm audit, Trivy по образу. Сборка падает на GPL, AGPL, SSPL, LGPL и на `@react-admin/ra-*`. В SBOM учитывается прямая зависимость `python-multipart` (Apache-2.0, добавлена в T041). MPL-2.0 в белый список не добавляется (пакет 2, Ф1).
+  - Пакет 3 (3Д3, 3Б9, 3К, 3Ф3): MIT-0 — в белом списке; `certifi` (MPL-2.0) — узкое исключение (пакет и версия) в `licenses-exceptions.txt`, подтверждение юриста — открытый пункт `16_release.md`; `app/client/budget_client` включён в SBOM; SBOM поставки — без extras; npm-SBOM подтверждает лицензию `@tanstack/react-query`.
+  - Не закрыта (пакет 3, 3Т): `make check` прошёл со `SKIP` npm и Trivy. Не хватает вывода `CHECK_STRICT=1 make check` на текущем дереве с npm-веткой по `app/frontend` и пунктов выше. Trivy — только в CI (T092); без журнала CI шаг Trivy идёт в релиз как НЕ ПРОВЕРЕНО.
   - Готово: `make check` с exit 0 и SBOM в `deploy/ci/out/`.
   - Зависимости: T001.
 - [ ] **T090 [P] [—] [devops] Руководство администратора.**
   - Файл: `docs/admin-guide.md` (RU): установка за ≤ 30 мин; переменные окружения; резервное копирование и восстановление; включение импорта и ключи; правила денег (копейки, накопительная амортизация, сутки UTC импорта); режимы политики; условие о локальном акте перед `enforce`; админка через HTTPS на обратном прокси — `SESSION_COOKIE_SECURE=true`, срок сессии 12 ч; адрес webhook — IP, а не имя хоста (14_tech_rulings.md, Б2, Б3).
   - Раздел «Импорт через корпоративный прокси» (14_tech_rulings.md, пакет 2, Б4): по умолчанию импорт выходит к `api.anthropic.com` / `api.openai.com` напрямую; если прямого выхода нет — задать `IMPORT_HTTPS_PROXY`; прокси действует только на импорт и только при `IMPORT_ENABLED=true`, на webhook и остальное не влияет; стандартные `HTTP(S)_PROXY` игнорируются намеренно; на прокси нужно разрешить CONNECT к двум хостам провайдеров; логин и пароль прокси в URL — секрет, `.env` в репозиторий не кладётся; как проверить — кнопка «Загрузить сейчас» и экран «Состояние импорта».
+  - Пакет 3: раздел «Webhook» — формат тела (T073), повторы и статусы; раздел «Проверка поставки на своём стенде» — чек-лист для пунктов, которые в релизе помечены НЕ ПРОВЕРЕНО (сборка образа, `make up/smoke`, `make failover`, `make backup/restore`, `egress-host-check`, замер SC-009) (3Д2).
   - Готово: техлид принял документ, QA прошёл его на чистой машине.
   - Зависимости: T087.
 - [ ] **T091 [P] [—] [backend] Руководство по интеграции.**
   - Файл: `docs/integration-guide.md` (RU): протокол `decisions` → вызов модели → `usage`; `http_status_hint`; эталонная схема с таймаутом 50 мс, fail-open и буфером; пример на `budget_client`; рекомендация закрыть прямой доступ к провайдерам.
   - Коды отказов (14_tech_rulings.md, пакет 2, В1-2, В1-4): решение `subject_unknown` для ключа без подразделения — `policy_mode=enforce`, `fail_mode=DEFAULT_FAIL_MODE`, `department_id=null`; 422 у отчёта без решения — `subject_unknown`, `model_unknown`, `fx_rate_missing`; `getCallerBalance` без `login` у ключа не-service — 404 `subject_unknown`.
+  - Пакет 3 (3К, 3Б9): MCP (`/mcp`, `x-mcp-tools` контракта) в v1 не поставляется — интеграция только по HTTP API; права на `state_dir` клиента и то, что в буфере лежат логины субъектов (ПДн), а ключа API нет.
   - Готово: техлид принял документ.
   - Зависимости: T033.
+- [ ] **T092 [P] [—] [devops] CI GitHub Actions** (14_tech_rulings.md, пакет 3, 3Д1(б), 3Д4).
+  - Файл: `.github/workflows/ci.yml`.
+  - Работа: на push в `main` выполняются `make lint`, `make test` против сервиса `postgres:18`, `npm --prefix app/frontend run test && npm --prefix app/frontend run build`, `make build`, `make up && make smoke && make backup && make restore && make smoke`, `make failover`, `CHECK_STRICT=1 make check` (с Trivy по образу), попытка `make egress-host-check`. SBOM и сводка `make check` — артефакты прогона. Сторонних actions — только checkout, версию проверить (иначе пометка [Гипотеза]). Секретов в workflow нет.
+  - Готово: журнал прогона (`gh run view --log` или выгрузка заказчика) для SHA коммита приложен к `14_devops.md`. Пока журнала нет, задача остаётся `[ ]`, а её пункты в релизе — НЕ ПРОВЕРЕНО.
+  - Зависимости: T087, T088.
+- [ ] **T093 [—] [qa] Доводка тестов пакета 3 и отказные тесты на стеке из локальных процессов** (14_tech_rulings.md, пакет 3, 3Б2, 3Б5, 3Б9, 3Д1(в)).
+  - Файлы: `tests/failover/{stack.py, conftest.py}`, `tests/acceptance/test_us6_reports_roles.py`, `tests/acceptance/test_us4_subscriptions.py`.
+  - Работа:
+    - `test_6_2_csv_injection_is_neutralized`: `bump_config(db)` после засева `user1`, `user2`, точечный `xfail` снят, проверки не меняются (3Б5);
+    - тесты: `endSubscription` датой в прошлом → 422; повторное открытие закончившейся подписки → 422 (3Б2);
+    - прогрев в SC-002: `decide` повторяется до ответа без `fail_open`, не больше 5 попыток (3Б9);
+    - драйвер `BM_STACK=compose|local` в `tests/failover/stack.py`. В режиме `local`: `stop` = SIGTERM, до 10 с ожидания, затем SIGKILL; `kill` = SIGKILL группы процессов `api`; проверка в БД — по `DATABASE_URL` локального кластера; управление процессами — через `deploy/local/stack.sh` (T087). Если остановить PostgreSQL нельзя, эта часть SC-002 пропускается с причиной и помечается НЕ ПРОВЕРЕНО.
+  - Готово: `make test` без этих двух `xfail`; `make up-local && BM_STACK=local make failover` — SC-002 и SC-003 PASS (статус гейта — PASS-замена).
+  - Зависимости: T087.
+- [ ] **T095 [P] [US4] [frontend] Доводка пакета 3** (14_tech_rulings.md, пакет 3, 3Ф2, 3Ф3, 3Ф5).
+  - Файлы: `src/resources/subscriptions/SubscriptionCreate.tsx`, тесты.
+  - Работа:
+    - список сотрудников подразделения в форме подписки загружается всеми страницами (`page_size=200`, пока не набран `total`). Тест: 450 сотрудников → 450 в списке, три запроса по контракту;
+    - период аудита по умолчанию (7 суток МСК) лежит в общем модуле констант интерфейса;
+    - вывод `npm ls @tanstack/react-query` — один экземпляр, версия та же, что требует react-admin.
+  - Готово: `npm --prefix app/frontend run test && npm --prefix app/frontend run build`.
+  - Зависимости: T052.
 - [ ] **T089 [—] [qa] Релизный прогон и гейты.**
   - Работа: `make test` (на `bm_test`, без параллельных прогонов), `make up`, `make smoke`, `make load`, `make failover`, `make check`, `make egress-host-check` (стенд QA), тест восстановления, установка по руководству. `make egress-host-check` проводится при пустом `IMPORT_HTTPS_PROXY` и `IMPORT_ENABLED=false`.
+  - Статусы гейтов (14_tech_rulings.md, пакет 3, 3Д2): у каждого гейта PASS / PASS-замена (с указанием отличия) / НЕ ПРОВЕРЕНО (причина, где проверить) / FAIL. Первая строка `15_qa_report.md`: `QA: PASS` — только если все обязательные гейты конституции (приёмочные, SC-001, SC-002, SCA, SBOM) в статусе PASS; иначе `QA: CONDITIONAL` со списком; при любом FAIL — `QA: FAIL`. В этой среде `make up/smoke/load/failover` выполняются на стеке из локальных процессов (`up-local`, `BM_STACK=local`), пункты Docker — по журналу CI (T092).
   - Результат — `15_qa_report.md` (выход QA).
-  - Готово: все гейты конституции зелёные.
-  - Зависимости: все задачи, не урезанные решением на контрольной точке.
+  - Готово: все гейты конституции зелёные — или `QA: CONDITIONAL` с полным списком непроверенного для решения заказчика в `16_release.md`.
+  - Зависимости: все задачи, не урезанные решением на контрольной точке (T080, T081 урезаны).
 
 ---
 
@@ -420,12 +482,14 @@ T001 ─┬─ T010,T011,T012 [P] ── T013 ─┐
       │               └─ T018 [P] ───┤
       │                              ├─ T020 ─ T021 ─ T030 ─ T031 ─┬─ T032 ─ T033
       ├─ T002 [P] ─ T043 ─ T052/T064/T072 [P]                     ├─ T050 ─ T051
-      ├─ T088 [P]                                                  ├─ T060 ─ T061 ─ T062/T063 [P]
-T003 [P] ─┘                                                         ├─ T080 ─ T081 (🔻1)
-T015 ─ T040 [P] ─ T041, T042 ─ T070 ─ T071 ─ T073 (🔻2)              └─ T087 ─ T086, T090
+      │                     T052 ─ T095                            ├─ T060 ─ T061 ─ T062/T063 [P]
+      ├─ T088 [P]                                                  ├─ ~~T080 ─ T081~~ (🔻1 урезано)
+T003 [P] ─┘                                                         └─ T087 ─ T086, T090, T093, T092
+T015 ─ T040 [P] ─ T041, T042 ─ T070 ─ T071 ─ T073 (🔻2, в v1)
 ```
 
 **Критический путь (Backend 1):** T013 → T021 → T031 → T061 → T071 → T089. Параллельно идут Backend 2 (T016–T019, T041, T042, T051, T033), frontend (T002, T043, …) и devops (T087, T088).
+**После контрольной точки недели 5:** Backend 1 — T062 → T063 → T091; Backend 2 — T073; Frontend — T095; DevOps — T087 → T092 → T088 → T090; QA — T093 → T086 → T089.
 
 **Внутри сценария:** тест qa → реализация backend → зелёный `make test` → коммит `<название проекта>: <задача>`.
 
@@ -433,5 +497,6 @@ T015 ─ T040 [P] ─ T041, T042 ─ T070 ─ T071 ─ T073 (🔻2)             
 
 1. **MVP**: Phase 1–5 (US1–US3) + T033 + T087. После этого — контрольная точка недели 5, `make up && make smoke`, отказной тест.
 2. **P2**: US4 → US5 (Anthropic, затем OpenAI) → US6.
-3. **Stretch**: webhook, затем MCP — только по решению на контрольной точке.
+3. **Stretch**: webhook, затем MCP — только по решению на контрольной точке. **Решение (2026-10-21, `14_checkpoint_week5.md`):** webhook — в v1, MCP — урезан (🔻1).
 4. Каждая фаза заканчивается зелёным `make test`. Расширение объёма вне этого файла — только через техлида.
+5. **Поставка в закрытой среде** (пакет 3, 3Д1–3Д2): статическая проверка compose, стек из локальных процессов и CI с журналом. Непроверенное честно помечается в релизном гейте.
