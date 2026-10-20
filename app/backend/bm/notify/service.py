@@ -44,7 +44,7 @@ async def create_once(
     kind: NotificationKind,
     department_id: UUID | None,
     period: PeriodName | None,
-    period_start: date | None,
+    period_start: date,
     message: str,
     *,
     webhook_status: Literal["disabled", "pending"] = "disabled",
@@ -52,7 +52,11 @@ async def create_once(
     """Создаёт уведомление, если по ключу его ещё нет. True — создано сейчас; False — уже было.
 
     Конкурентные вызовы безопасны: побеждает ровно один (ON CONFLICT по уникальному ограничению).
+    `period_start` обязателен (14_tech_rulings.md Б5): у уведомлений без периода это дата МСК, когда
+    обнаружено условие, иначе уведомление пришло бы один раз навсегда. `None` — ValueError.
     """
+    if period_start is None:
+        raise ValueError("period_start обязателен: для уведомлений без периода — дата МСК обнаружения (Б5)")
     created = await conn.fetchval(
         "INSERT INTO notification(kind, department_id, period, period_start, message, webhook_status) "
         "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT ON CONSTRAINT notification_once DO NOTHING RETURNING id",

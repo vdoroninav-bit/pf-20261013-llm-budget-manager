@@ -54,21 +54,13 @@ from tests.fixtures.qa import (
 )
 from tests.fixtures.seed import Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T061: конвейер импорта и справочник источников",
-    ),
-]
+pytestmark = [pytest.mark.db]
 
 OCT12, OCT13 = date(2026, 10, 12), date(2026, 10, 13)
 T062 = pytest.mark.xfail(
     strict=True, raises=(AssertionError, ImportError), reason="T062: коннектор Anthropic"
 )
 T063 = pytest.mark.xfail(strict=True, raises=(AssertionError, ImportError), reason="T063: коннектор OpenAI")
-T071 = pytest.mark.xfail(strict=True, raises=(AssertionError, ImportError), reason="T071: отчёты и баланс")
 
 
 @pytest.fixture
@@ -151,7 +143,6 @@ async def test_5_2_decision_api_source_is_not_charged(
     assert limit_of(b, "department", "month")["spent"]["import_rub"] == "0.00"
 
 
-@T071
 async def test_5_2_reconciliation_report_shows_difference(
     app: Any, client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection, clock: FrozenClock
 ) -> None:
@@ -433,7 +424,6 @@ async def test_5_7_late_import_belongs_to_previous_month(
     assert limit_of(b, "department", "month")["remaining_rub"] == "100000.00"
 
 
-@T071
 async def test_5_7_late_import_shown_in_previous_month_report(
     app: Any, client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection, clock: FrozenClock
 ) -> None:

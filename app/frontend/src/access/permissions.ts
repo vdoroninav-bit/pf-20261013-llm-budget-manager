@@ -41,9 +41,34 @@ export const OPERATION_ROLES = {
   listAdminUsers: ADMIN,
   createAdminUser: ADMIN,
   updateAdminUser: ADMIN,
+  // T064: импорт провайдеров (экран 7) и плашка импорта на панели (В1: budget_owner — сокращённый ответ).
+  getImportStatus: ALL,
+  listImportRuns: ADMIN,
+  runImport: ADMIN,
+  createProviderSource: ADMIN,
+  updateProviderSource: ADMIN,
+  deleteProviderSource: ADMIN,
+  // T072: панель, отчёты, журналы.
+  getDepartmentBalance: ALL,
+  listDepartmentBalanceItems: ALL,
+  getSpendReport: ALL,
+  getSpendCsv: ALL,
+  getReconciliation: ADMIN_FINANCE,
+  listNotifications: ADMIN_OWNER,
+  markNotificationRead: ADMIN_OWNER,
+  listEvents: ADMIN_OWNER,
+  listAudit: ADMIN,
 } as const satisfies Record<string, readonly Role[]>;
 
 export type OperationId = keyof typeof OPERATION_ROLES;
+
+/**
+ * Экран 7 «Импорт провайдеров» (design/screens.md §7): администратор и финансист.
+ * У владельца бюджета getImportStatus есть только для плашки на панели (13_design_rulings.md, В1) — пункта меню и экрана нет.
+ */
+export function canSeeImportScreen(role: Role | undefined | null): boolean {
+  return can(role, 'getImportStatus') && role !== 'budget_owner';
+}
 
 export function can(role: Role | undefined | null, operation: OperationId): boolean {
   return !!role && (OPERATION_ROLES[operation] as readonly Role[]).includes(role);

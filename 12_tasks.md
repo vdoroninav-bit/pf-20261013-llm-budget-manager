@@ -219,7 +219,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - ключ показывается один раз, отзыв действует сразу (следующий `decide` → 401).
   - Готово: тесты FAIL.
   - Зависимости: T015.
-- [ ] **T041 [US3] [backend] Загрузка AD-файла.**
+- [x] **T041 [US3] [backend] Загрузка AD-файла.**
   - Файлы: `bm/org_import/service.py` (`import_ad_csv(conn, data: bytes, dry_run: bool, actor) -> OrgImportSummary`), `bm/http/routers/org.py` (`importOrg`).
   - Формат: CSV `login;display_name;group;is_primary`, UTF-8. Псевдоним — `emp-` + 10 случайных hex, выдаётся один раз.
   - Готово: тесты 3.1, 3.2 и `test_removed_*` проходят.
@@ -263,7 +263,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - курс изменён задним числом — M месяца не меняется.
   - Готово: тесты FAIL (новые); тесты T030/T040 после доводки — PASS.
   - Зависимости: T030.
-- [ ] **T051 [US4] [backend] Подписки и амортизация в остатке.**
+- [x] **T051 [US4] [backend] Подписки и амортизация в остатке.**
   - Файлы: `bm/http/routers/subscriptions.py` (5 операций), `bm/budget/service.py` (амортизация в `balance` и `decide` через `subscription_month`), `bm/worker/jobs.py` (задача на 1-е число 00:05 МСК: материализовать `subscription_month`, проверить долю подписок).
   - Правила: денежные поля подписки неизменяемы, их защищает триггер из T014. M месяца берётся только из материализованной `subscription_month` — на это опирается тест QA «подписки ≥ 100%» (14_tech_rulings.md, пакет 2, QA7).
   - Готово: `pytest tests/acceptance/test_us4_subscriptions.py` и `make test`; снят точечный `xfail(T051)` с `test_subscriptions_over_100_percent_block_paid_calls`.
@@ -285,7 +285,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - SC-007: токенные события + импорт + подписка USD + переход месяца, остаток совпадает с ручным расчётом до копейки.
   - Готово: тесты FAIL.
   - Зависимости: T031.
-- [ ] **T061 [US5] [backend] Конвейер импорта и справочник источников.**
+- [x] **T061 [US5] [backend] Конвейер импорта и справочник источников.**
   - Файлы: `bm/provider_import/{pipeline.py, sources/base.py, sources/recorded.py}`, `bm/http/routers/{provider_sources.py, imports.py}`, `bm/worker/jobs.py` (запуск в `IMPORT_HOUR_MSK`, повтор раз в час до `IMPORT_RETRY_UNTIL_HOUR_MSK`, окно `IMPORT_WINDOW_DAYS`).
   - Правила:
     - upsert строки → дельта в `ledger_daily` подразделения в той же транзакции;
@@ -312,7 +312,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - Прокси (14_tech_rulings.md, пакет 2, Б4): клиент берётся только из `egress("openai")`, поэтому `IMPORT_HTTPS_PROXY` применяется автоматически; своей настройки прокси в коннекторе нет. Тест: при заданном прокси он есть у клиента `openai`. Настройка прокси сделана в T062 и остаётся, даже если T063 урезана.
   - Готово: `make test`.
   - Зависимости: T061.
-- [ ] **T064 [P] [US5] [frontend] Источники и состояние импорта.**
+- [x] **T064 [P] [US5] [frontend] Источники и состояние импорта.**
   - Файлы: `src/resources/providerSources/*`, `src/pages/ImportStatus.tsx` (включён или нет, ключ задан или нет, последняя загрузка, отставание, несопоставленные источники, кнопка «Загрузить сейчас»), тесты.
   - Готово: `npm --prefix app/frontend run test`.
   - Зависимости: T043.
@@ -332,7 +332,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
     - значения `*_ADMIN_KEY` не встречаются в логах, ответах и дампе БД.
   - Готово: тесты FAIL.
   - Зависимости: T042.
-- [ ] **T071 [US6] [backend] Отчёты, баланс подразделения, журналы, фоновые задачи.**
+- [x] **T071 [US6] [backend] Отчёты, баланс подразделения, журналы, фоновые задачи.**
   - Файлы: `bm/reports/service.py`, `bm/http/routers/{reports.py, events.py, audit.py}`, `bm/http/routers/departments.py` (`getDepartmentBalance`, `listDepartmentBalanceItems`), `bm/worker/jobs.py`, `bm/logging.py`.
   - Фоновые задачи: пороги раз в минуту; `agg_daily` раз в сутки; ретенция — создание партиций на 2 месяца вперёд и `DROP` партиций старше `RETENTION_DETAIL_MONTHS`.
   - Ключ уведомлений без периода (14_tech_rulings.md, Б5): `fx_missing` — `department_id=NULL`, `period=NULL`, `period_start` = 1-е число месяца без курса (одно уведомление на месяц); `reservation_no_report` — подразделение резерва, `period=NULL`, `period_start` = дата МСК обнаружения.
@@ -346,7 +346,7 @@ description: "Задачи LLM Budget Manager v1 по ролям"
   - `decision_not_followed` (пакет 2, В1-3): `call_record.final_model` = фактическая модель, по которой списаны деньги; отчёты и разбивка по моделям идут по `final_model`. Новая колонка и миграция не нужны.
   - Готово: `pytest tests/acceptance/test_us6_reports_roles.py tests/security` и `make test`; контрактный тест из T015 снимает `xfail` для всех операций, кроме MCP; снят `xfail` с `test_removed_employee_keeps_period_spend` и T041 отмечена `[x]`.
   - Зависимости: T031, T019, T051, T061, T070.
-- [ ] **T072 [P] [US6] [frontend] Панель, отчёты, журналы.**
+- [x] **T072 [P] [US6] [frontend] Панель, отчёты, журналы.**
   - Файлы: `src/pages/{Dashboard, Reports, Reconciliation, Notifications}.tsx`, `src/resources/{events, audit}/*`, меню по ролям, тесты.
   - Содержание: панель — по каждому периоду лимит, расход по источникам, резервы, остаток, дата сброса и пометка «бюджет занят подписками»; разбивка по моделям; выгрузка CSV.
   - Доступность (14_tech_rulings.md, пакет 2, Ф1): axe не подключается. Контраст проверяет тест `src/__tests__/contrast.test.ts`: функция по формуле WCAG 2.x (без зависимостей) считает отношение для всех пар из 13_design.md §8 по значениям `design/tokens.json` в обеих темах; порог 4,5:1 для текста и 3:1 для `border-strong`. ARIA и клавиатура — запросами `getByRole`/`getByLabelText` и проверками фокуса, как в T043.

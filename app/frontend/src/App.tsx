@@ -14,6 +14,14 @@ import { Dashboard } from './pages/Dashboard';
 import { LoginPage } from './pages/LoginPage';
 import { PasswordPage } from './pages/PasswordPage';
 import { OrgImportPage } from './pages/OrgImport';
+import { ImportStatusPage } from './pages/ImportStatus';
+import { ProviderSourceList } from './resources/providerSources';
+import { ImportRunList } from './resources/providerSources/ImportRunList';
+import { ReportsPage } from './pages/Reports';
+import { ReconciliationPage } from './pages/Reconciliation';
+import { NotificationsPage } from './pages/Notifications';
+import { EventsPage } from './resources/events';
+import { AuditPage } from './resources/audit';
 import { can } from './access/permissions';
 import type { Role } from './api/types';
 import { DepartmentCreate, DepartmentEdit, DepartmentList, DepartmentShow } from './resources/departments';
@@ -68,6 +76,17 @@ export function App({ fetch = (input, init) => window.fetch(input, init) }: AppP
       <CustomRoutes>
         <Route path={PASSWORD_ROUTE} element={<PasswordPage />} />
         <Route path="/org-import" element={<OrgImportPage />} />
+        {/* Экран 7 (T064): вкладки «Состояние», «Источники», «Запуски»; права проверяет сам экран. */}
+        <Route path="/dashboard/:department_id" element={<Dashboard />} />
+        <Route path="/imports" element={<ImportStatusPage />} />
+        <Route path="/imports/sources" element={<ProviderSourceList />} />
+        <Route path="/imports/runs" element={<ImportRunList />} />
+        {/* Экраны 8 и 11 (T072); права проверяет сам экран, прямая ссылка без прав — «Нет доступа». */}
+        <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/reports/reconciliation" element={<ReconciliationPage />} />
+        <Route path="/events" element={<EventsPage />} />
+        <Route path="/audit" element={<AuditPage />} />
+        <Route path="/notifications" element={<NotificationsPage />} />
       </CustomRoutes>
       {(role: Role | null) => resourcesFor(role)}
     </Admin>
@@ -117,7 +136,9 @@ function resourcesFor(role: Role | null) {
     can(role, 'listCallers') ? (
       <Resource key="callers" name="callers" list={CallerList} create={CallerCreate} edit={CallerEdit} recordRepresentation="name" />
     ) : null,
+    // Экраны источников и запусков — маршруты /imports/* (T064); ресурсы нужны для кэша и выбора в форме ключа.
     can(role, 'listProviderSources') ? <Resource key="providerSources" name="providerSources" /> : null,
+    can(role, 'listImportRuns') ? <Resource key="importRuns" name="importRuns" /> : null,
     can(role, 'listAdminUsers') ? (
       <Resource
         key="admin-users"

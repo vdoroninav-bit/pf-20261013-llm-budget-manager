@@ -280,7 +280,8 @@ async def worker_tick(app: Any) -> list[str]:
     """
     from bm.worker.jobs import Scheduler, default_jobs
 
-    ran: list[str] = await Scheduler(app.state.pool, default_jobs(app.state.budget), app.state.clock).tick()
+    jobs = default_jobs(app.state.budget, app.state.settings)  # с настройками — и задача импорта (T061)
+    ran: list[str] = await Scheduler(app.state.pool, jobs, app.state.clock).tick()
     return ran
 
 

@@ -19,7 +19,7 @@ CHILD = """
 from bm import metrics
 metrics.DECISIONS.labels(outcome="allow", code="").inc()
 metrics.DECISION_LATENCY.observe(0.004)
-metrics.RESERVATIONS_OPEN.set({n})
+metrics.IMPORT_LAG_HOURS.labels(provider="anthropic").set({n})
 """
 
 
@@ -35,12 +35,18 @@ def test_two_processes_are_summed(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     text = metrics.render().decode()
     assert 'decisions_total{code="",outcome="allow"} 2.0' in text
     assert "decision_latency_seconds_count 2.0" in text
-    assert "reservations_open 5.0" in text  # mostrecent: значение последней записи
+    assert 'import_lag_hours{provider="anthropic"} 5.0' in text  # mostrecent: значение последней записи
 
 
 def test_gauges_declare_multiprocess_mode() -> None:
-    for gauge in (metrics.RESERVATIONS_OPEN, metrics.IMPORT_LAG_HOURS):
+    for gauge in (metrics.IMPORT_LAG_HOURS,):
         assert gauge._multiprocess_mode == "mostrecent"
+
+
+def test_reservations_open_gauge_removed() -> None:
+    """14_tech_rulings.md, пакет 2, В1-6: gauge ставил worker, а /metrics отдаёт api — метрика убрана."""
+    assert not hasattr(metrics, "RESERVATIONS_OPEN")
+    assert b"reservations_open" not in metrics.render()
 
 
 def test_single_process_without_dir(monkeypatch: pytest.MonkeyPatch) -> None:

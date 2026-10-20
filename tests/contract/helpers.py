@@ -32,7 +32,13 @@ def contract() -> dict[str, Any]:
 @cache
 def _openapi() -> OpenAPI:
     # application/problem+json — тоже JSON (RFC 9457); openapi-core по умолчанию его не разбирает.
-    config = Config(extra_media_type_deserializers={"application/problem+json": json.loads})
+    # text/csv (getSpendCsv, схема `type: string`) openapi-core не декодирует и отдаёт bytes — декодируем сами.
+    config = Config(
+        extra_media_type_deserializers={
+            "application/problem+json": json.loads,
+            "text/csv": lambda data, **_: data.decode("utf-8") if isinstance(data, bytes) else data,
+        }
+    )
     return OpenAPI.from_dict(contract(), config=config)
 
 

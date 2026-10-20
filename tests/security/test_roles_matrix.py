@@ -8,6 +8,7 @@
 
 Операции, роутеры которых ещё не написаны (`PENDING` контрактного теста), проверяются в отдельных тестах с
 `xfail(strict)`: когда последняя из них появится (T071), тест станет XPASS и метку нужно снять.
+Метки сняты в T071: `PENDING` пуст, все операции админки проверяются тестами `*_implemented*`.
 """
 
 import uuid
@@ -27,11 +28,6 @@ from tests.fixtures.seed import Emp, Seed
 pytestmark = pytest.mark.db
 
 ROLES = ("admin", "budget_owner", "finance_viewer")
-PENDING_MARK = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="T051/T061/T071: роутеры подписок, импорта, отчётов, журналов и баланса подразделения",
-)
 QUERY_VALUES = {"from": "2026-10-01", "to": "2026-10-31", "period": "month", "month": "2026-10"}
 
 
@@ -155,7 +151,6 @@ async def test_role_matrix_implemented_operations(
     assert problems == [], "\n".join(problems)
 
 
-@PENDING_MARK
 @pytest.mark.parametrize("role", ROLES)
 async def test_role_matrix_pending_operations(
     app: Any, client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection, role: str
@@ -185,7 +180,6 @@ async def test_anonymous_gets_401_on_implemented_operations(client: httpx.AsyncC
     assert problems == [], "\n".join(problems)
 
 
-@PENDING_MARK
 async def test_anonymous_gets_401_on_pending_operations(client: httpx.AsyncClient, seed: Seed) -> None:
     problems = await _anonymous(client, seed, pending())
     assert problems == [], "\n".join(problems)
@@ -255,7 +249,6 @@ async def test_owner_cannot_reach_other_department_implemented(
     assert problems == [], "\n".join(problems)
 
 
-@PENDING_MARK
 async def test_owner_cannot_reach_other_department_pending(
     client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection
 ) -> None:

@@ -29,7 +29,8 @@ describe('каркас админки', () => {
     };
     const ff = fakeFetch(...Array.from({ length: 6 }, () => json(200, me)));
     render(<App fetch={ff.fetch} />);
-    expect(await screen.findByText('Вы вошли как admin (Администратор).')).toBeTruthy();
+    // Вход выполнен — открыта админка с меню разделов (панель подразделения — T072).
+    expect(await screen.findByRole('navigation', { name: 'Разделы' })).toBeTruthy();
     expect(['light', 'dark']).toContain(document.documentElement.dataset.theme);
     expect(window.localStorage.length).toBe(0);
   });

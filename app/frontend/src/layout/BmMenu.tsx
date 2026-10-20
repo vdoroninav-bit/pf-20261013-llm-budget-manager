@@ -8,8 +8,11 @@ import UploadFileIcon from '@mui/icons-material/UploadFile';
 import KeyIcon from '@mui/icons-material/Key';
 import PeopleIcon from '@mui/icons-material/People';
 import CardMembershipIcon from '@mui/icons-material/CardMembership';
+import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
+import AssessmentIcon from '@mui/icons-material/Assessment';
+import HistoryIcon from '@mui/icons-material/History';
 import { Menu, useGetIdentity } from 'react-admin';
-import { can } from '../access/permissions';
+import { can, canSeeImportScreen } from '../access/permissions';
 import type { BmIdentity } from '../authProvider';
 import { ru } from '../i18n/ru';
 
@@ -38,10 +41,15 @@ export function BmMenu() {
         {can(role, 'importOrg') && (
           <Menu.Item to="/org-import" primaryText={t.org_import} leftIcon={<UploadFileIcon />} />
         )}
+        {canSeeImportScreen(role) && (
+          <Menu.Item to="/imports" primaryText={t.imports} leftIcon={<CloudDownloadIcon />} />
+        )}
+        {can(role, 'getSpendReport') && <Menu.Item to="/reports" primaryText={t.reports} leftIcon={<AssessmentIcon />} />}
         {can(role, 'listCallers') && <Menu.Item to="/callers" primaryText={t.callers} leftIcon={<KeyIcon />} />}
         {can(role, 'listAdminUsers') && (
           <Menu.Item to="/admin-users" primaryText={t.admin_users} leftIcon={<PeopleIcon />} />
         )}
+        {can(role, 'listEvents') && <Menu.Item to="/events" primaryText={t.journals} leftIcon={<HistoryIcon />} />}
       </Menu>
     </Box>
   );

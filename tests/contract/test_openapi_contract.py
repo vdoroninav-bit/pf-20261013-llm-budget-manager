@@ -15,31 +15,7 @@ from openapi_spec_validator import validate
 from tests.contract.helpers import assert_matches_contract, contract, operations
 
 # Операции, которые ещё не реализованы (задача, которая их закрывает).
-PENDING: dict[str, str] = {
-    # T051 — подписки
-    "listSubscriptions": "T051",
-    "createSubscription": "T051",
-    "previewSubscription": "T051",
-    "getSubscription": "T051",
-    "endSubscription": "T051",
-    "deleteSubscription": "T051",
-    # T061 — импорт провайдеров
-    "listProviderSources": "T061",
-    "createProviderSource": "T061",
-    "updateProviderSource": "T061",
-    "deleteProviderSource": "T061",
-    "getImportStatus": "T061",
-    "listImportRuns": "T061",
-    "runImport": "T061",
-    # T071 — отчёты, журналы, баланс подразделения
-    "getDepartmentBalance": "T071",
-    "listDepartmentBalanceItems": "T071",
-    "getSpendReport": "T071",
-    "getSpendCsv": "T071",
-    "getReconciliation": "T071",
-    "listEvents": "T071",
-    "listAudit": "T071",
-}
+PENDING: dict[str, str] = {}
 
 
 def _registered(app: Any) -> dict[str, tuple[set[str], str]]:

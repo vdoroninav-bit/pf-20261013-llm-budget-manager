@@ -39,12 +39,7 @@ from tests.fixtures.qa import (
 )
 from tests.fixtures.seed import Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True, raises=(AssertionError, ImportError), reason="T051: подписки и амортизация в остатке"
-    ),
-]
+pytestmark = [pytest.mark.db]
 
 
 def sub_body(

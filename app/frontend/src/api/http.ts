@@ -58,6 +58,8 @@ function formErrors(problem: Partial<Problem>, message: string) {
 async function readBody(res: Response): Promise<unknown> {
   if (res.status === 204) return undefined;
   const type = res.headers.get('content-type') ?? '';
+  // Текстовые ответы (getSpendCsv — text/csv) отдаются строкой как есть.
+  if (res.ok && type.startsWith('text/')) return res.text();
   if (!type.includes('json')) return undefined;
   try {
     return await res.json();

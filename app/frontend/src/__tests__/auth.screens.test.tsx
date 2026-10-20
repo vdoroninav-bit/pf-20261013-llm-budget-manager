@@ -21,6 +21,8 @@ describe('1.1 Вход', () => {
           loggedIn = true;
           return ok(session('admin'));
         },
+        // После входа — панель (T072): у администратора она начинается с выбора подразделения.
+        listDepartments: list([]),
       },
     });
     expect(await screen.findByRole('heading', { name: 'Бюджеты LLM' })).toBeTruthy();
@@ -34,7 +36,9 @@ describe('1.1 Вход', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Войти' }));
     await waitFor(() => expect(api.callsOf('login')).toHaveLength(1));
     expect(api.callsOf('login')[0]!.body).toEqual({ login: 'admin', password: 'secret-password' });
-    expect(await screen.findByText('Вы вошли как admin (Администратор).')).toBeTruthy();
+    expect(
+      await screen.findByText('Подразделений пока нет. Загрузите выгрузку групп AD или создайте подразделение вручную.'),
+    ).toBeTruthy();
     expect(api.violations).toEqual([]);
   });
 

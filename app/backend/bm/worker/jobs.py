@@ -12,13 +12,22 @@ from datetime import datetime, timedelta
 import asyncpg
 
 from bm import metrics
+from bm.budget import subs
 from bm.budget.service import Budget
 from bm.clock import Clock
+from bm.notify import thresholds
+from bm.provider_import import pipeline
+from bm.reports import maintenance
+from bm.settings import Settings
 
 log = logging.getLogger("bm.worker")
 
 EXPIRE_EVERY = timedelta(seconds=60)
 PARTITIONS_EVERY = timedelta(hours=1)
+SUBSCRIPTIONS_EVERY = timedelta(minutes=5)
+IMPORT_EVERY = timedelta(minutes=5)  # T061: ручной запуск подхватывается за ≤ 5 мин
+NOTIFY_EVERY = timedelta(seconds=60)  # T071: пороги, нет курса, резервы без отчёта
+DAILY = timedelta(days=1)  # T071: agg_daily и ретенция
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,10 +37,52 @@ class Job:
     run: Callable[[], Awaitable[object]]
 
 
-def default_jobs(budget: Budget) -> list[Job]:
+def default_jobs(budget: Budget, settings: Settings | None = None) -> list[Job]:
     return [
         Job("expire_reserves", EXPIRE_EVERY, lambda: budget.expire_reserves(budget.now())),
         Job("call_record_partitions", PARTITIONS_EVERY, budget.ensure_partitions),
+        # T051: с 00:05 МСК — M месяца и доля подписок нового периода (повтор без дублей)
+        Job(
+            "subscriptions_new_period",
+            SUBSCRIPTIONS_EVERY,
+            lambda: subs.new_period_check(budget.pool, budget.now()),
+        ),
+        *report_jobs(budget, settings),
+        *import_jobs(budget, settings),
+    ]
+
+
+def import_jobs(budget: Budget, settings: Settings | None) -> list[Job]:
+    """T061: очередь ручных запусков и плановая загрузка (IMPORT_HOUR_MSK, повтор раз в час до
+    IMPORT_RETRY_UNTIL_HOUR_MSK). Без `settings` задачи нет; при IMPORT_ENABLED=false такт ничего не делает.
+    """
+    if settings is None:
+        return []
+    return [
+        Job("provider_import", IMPORT_EVERY, lambda: pipeline.scheduled(budget.pool, settings, budget.now()))
+    ]
+
+
+def report_jobs(budget: Budget, settings: Settings | None) -> list[Job]:
+    """T071: уведомления раз в минуту, `agg_daily` и ретенция раз в сутки.
+
+    Без `settings` (тесты QA вызывают `default_jobs(budget)`) — значения по умолчанию из 12_plan.md §8.
+    """
+    webhook = bool(settings and settings.webhook_url)
+    detail = settings.retention_detail_months if settings else 12
+    agg = settings.retention_agg_months if settings else 36
+    return [
+        Job(
+            "notifications",
+            NOTIFY_EVERY,
+            lambda: thresholds.evaluate(budget, budget.pool, webhook_enabled=webhook),
+        ),
+        Job("agg_daily", DAILY, lambda: maintenance.daily_aggregates(budget.pool, budget.now())),
+        Job(
+            "retention",
+            DAILY,
+            lambda: maintenance.retention(budget.pool, budget.now(), detail_months=detail, agg_months=agg),
+        ),
     ]
 
 

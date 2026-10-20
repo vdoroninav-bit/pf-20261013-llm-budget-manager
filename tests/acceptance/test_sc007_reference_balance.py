@@ -55,17 +55,7 @@ from tests.fixtures.qa import (
 )
 from tests.fixtures.seed import Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T051 + T061: амортизация подписок и конвейер импорта (снимает тот, кто закончит вторым)",
-    ),
-]
-T071 = pytest.mark.xfail(
-    strict=True, raises=(AssertionError, ImportError), reason="T071: баланс подразделения"
-)
+pytestmark = [pytest.mark.db]
 
 EXPECTED_OCT14 = {
     "day": {
@@ -231,7 +221,6 @@ async def test_sc007_api_balance_matches_manual_calculation(
     assert month["resets_at"].startswith("2026-12-01T00:00:00")
 
 
-@T071
 async def test_sc007_admin_balance_and_items_match_manual_calculation(
     app: Any, client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection, clock: FrozenClock
 ) -> None:

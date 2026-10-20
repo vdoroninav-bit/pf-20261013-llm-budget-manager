@@ -5,6 +5,7 @@ import logging
 import signal
 from datetime import timedelta
 
+from bm import logging as bm_logging
 from bm.budget.service import Budget
 from bm.clock import SystemClock
 from bm.db.migrate import migrate
@@ -30,7 +31,7 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
             timeout_ms=settings.decision_timeout_ms,
             default_fail_mode=settings.default_fail_mode,
         )
-        scheduler = Scheduler(pool, default_jobs(budget), clock)
+        scheduler = Scheduler(pool, default_jobs(budget, settings), clock)
         log.info("worker_started")
         while not stop.is_set():
             await scheduler.tick()
@@ -45,7 +46,7 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
 
 def main() -> None:
     settings = Settings()  # type: ignore[call-arg]  # значения — из окружения
-    logging.basicConfig(level=settings.log_level)
+    bm_logging.setup(settings)  # JSON-журнал, уровень LOG_LEVEL (T071)
 
     async def _main() -> None:
         stop = asyncio.Event()

@@ -59,6 +59,8 @@ export interface ApiCall {
 export interface Reply {
   status: number;
   body?: unknown;
+  /** Тип ответа не JSON (getSpendCsv — text/csv): тело-строка отдаётся как есть. Тип должен быть объявлен в контракте. */
+  contentType?: string;
 }
 export type Handler = Reply | ((call: ApiCall) => Reply | Promise<Reply>);
 
@@ -97,12 +99,15 @@ const routes: Route[] = Object.entries(spec.paths).flatMap(([template, item]) =>
 
 const deref = (p: Param): Param => (p.$ref ? spec.components.parameters[p.$ref.split('/').pop()!]! : p);
 
-function responseSchema(op: Operation, status: number): { declared: boolean; schema?: Schema } {
+function responseSchema(
+  op: Operation,
+  status: number,
+): { declared: boolean; schema?: Schema; types: string[] } {
   let r = op.responses[String(status)];
-  if (!r) return { declared: false };
+  if (!r) return { declared: false, types: [] };
   if (r.$ref) r = spec.components.responses[r.$ref.split('/').pop()!]!;
   const media = r.content?.['application/json'] ?? r.content?.['application/problem+json'];
-  return { declared: true, schema: media?.schema };
+  return { declared: true, schema: media?.schema, types: Object.keys(r.content ?? {}) };
 }
 
 export const session = (role: Role, extra: Partial<Session['user']> = {}): Session => ({
@@ -130,7 +135,13 @@ export interface ContractApiOptions {
 export function contractApi({ role, session: s = session(role), handlers }: ContractApiOptions) {
   const calls: ApiCall[] = [];
   const violations: string[] = [];
-  const all: Record<string, Handler> = { me: ok(s), ...handlers };
+  // Шапка админки у А и В опрашивает колокольчик (listNotifications?unread=true, T072) на любом экране —
+  // по умолчанию непрочитанных нет; тесты, которым важны уведомления, задают свой ответ.
+  const all: Record<string, Handler> = {
+    me: ok(s),
+    ...(['admin', 'budget_owner'].includes(s.user.role) ? { listNotifications: list([]) } : {}),
+    ...handlers,
+  };
 
   async function fetch(input: string, init: RequestInit = {}): Promise<Response> {
     const method = (init.method ?? 'GET').toLowerCase() as Method;
@@ -214,7 +225,16 @@ export function contractApi({ role, session: s = session(role), handlers }: Cont
     const reply = typeof handler === 'function' ? await handler(call) : handler;
     const declaredResp = responseSchema(op, reply.status);
     if (!declaredResp.declared) violations.push(`${op.operationId}: статус ${reply.status} не объявлен`);
-    else if (declaredResp.schema && reply.body !== undefined) {
+    else if (reply.contentType) {
+      if (!declaredResp.types.includes(reply.contentType)) {
+        violations.push(`${op.operationId}: тип ответа ${reply.contentType} не объявлен`);
+      }
+      if (typeof reply.body !== 'string') violations.push(`${op.operationId}: тело ${reply.contentType} — не строка`);
+      return new Response(String(reply.body ?? ''), {
+        status: reply.status,
+        headers: { 'content-type': `${reply.contentType}; charset=utf-8` },
+      });
+    } else if (declaredResp.schema && reply.body !== undefined) {
       violations.push(...checkSchema(spec, declaredResp.schema, reply.body).map((e) => `${op.operationId} ответ: ${e}`));
     }
     if (reply.status === 204 || reply.body === undefined) return new Response(null, { status: reply.status });

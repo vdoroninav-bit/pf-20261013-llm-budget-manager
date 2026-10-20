@@ -22,7 +22,6 @@ from tests.security.test_no_content import db_dump, log_text
 pytestmark = pytest.mark.db
 
 KEYS = (ANTHROPIC_KEY, OPENAI_KEY)
-T061 = pytest.mark.xfail(strict=True, raises=(AssertionError, ImportError), reason="T061: импорт и его API")
 T062 = pytest.mark.xfail(
     strict=True, raises=(AssertionError, ImportError), reason="T062: коннектор Anthropic"
 )
@@ -74,7 +73,6 @@ async def test_api_logs_and_db_without_keys(
     assert_no_keys("дамп БД", await db_dump(db))
 
 
-@T061
 async def test_import_api_never_returns_keys(
     app: Any, client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture
 ) -> None:

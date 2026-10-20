@@ -295,3 +295,105 @@ $ npm --prefix app/frontend run test         # exit 0, 246/246
 
    Всё это есть в контракте 1.0.2.
 3. Нужен ли `q` у `listEmployees` (отклонение 4)? Это правка контракта, не v1-критично.
+
+---
+
+## 2026-10-21 — T064 «Источники и состояние импорта» (US5), T072 «Панель, отчёты, журналы» (US6)
+
+**Итог:** T064 и T072 закрыты, в `12_tasks.md` стоит `[x]`. Результат проверки:
+- `npx vitest run`: 28 файлов, **360/360** тестов (было 246). Три прогона подряд зелёные.
+- `npm run typecheck`: exit 0.
+- `npm run build` вместе с `check-dist`: exit 0, внешних адресов нет.
+
+Backend операций T061–T063 и T071 ещё не готов. Все экраны проверены против `contractApi`: каждый запрос и ответ сверяется с `12_openapi.yaml` 1.0.2, в каждом экранном тесте `violations = []`.
+
+### Что сделано
+
+| Экран (screens.md) | Файлы | Операции |
+|---|---|---|
+| 7.1 Состояние импорта: включён/выключен с пояснением про `IMPORT_ENABLED`, по провайдеру ключ (задан / «задайте …_ADMIN_KEY»), «Загружено по … (сутки UTC)», последний запуск, отставание (число + warning по SC-008), неудачи подряд, класс ошибки текстом §7.4 и моноширинным, несопоставленные источники с «Сопоставить», «Загрузить сейчас» (заранее выключена с подсказкой; 409 `import_disabled` / `provider_key_missing`), «Импорт … не используется» | `src/pages/ImportStatus.tsx` | `getImportStatus`, `runImport`, `listProviderSources`, `createProviderSource` |
+| 7.2 Источники: подпись про способ учёта, список, добавление (для Anthropic только Workspace), изменение (PATCH только изменённых полей), удаление с подтверждением; 409 `source_exists`, 422 `unsupported_source_kind` | `src/resources/providerSources/index.tsx` | `listProviderSources`, `createProviderSource`, `updateProviderSource`, `deleteProviderSource`, `listDepartments` |
+| 7.3 Запуски: колонки §7.3, фильтр провайдера, опрос 10 с только при `queued`/`running` | `src/resources/providerSources/ImportRunList.tsx` | `listImportRuns` |
+| 2 Панель: выбор подразделения (А, Ф), шапка (режим, поведение, «Расчёт на … МСК», «Обновить»), шкалы день/неделя/месяц, остаток/перерасход, лимит, сброс, легенда, пометки «занят подписками» (В3) / доля ≥ порога / режим «Наблюдать» при перерасходе, «Из чего сложился расход» с «Показать строки», «По моделям» (USD, поздний импорт, итог), плашка импорта (В1), лента непрочитанных с «Прочитано», пустые состояния, частичные данные, автообновление 60 с | `src/pages/Dashboard.tsx`, `src/components/PeriodBudgetMeter.tsx` (`BalanceMeter`), `src/budget/balanceMeter.ts`, `src/import/importHealth.ts` | `listDepartments`, `getDepartment`, `getDepartmentBalance`, `listDepartmentBalanceItems`, `getSpendReport`, `getImportStatus`, `listNotifications`, `markNotificationRead`, `revealPseudonym` |
+| 8.1 Расход: период с быстрыми кнопками, подразделение (кроме В), группировка, таблица по группировке, «Всего», «Выгрузить CSV» | `src/pages/Reports.tsx` | `getSpendReport`, `getSpendCsv`, `listDepartments` |
+| 8.2 Сверка (А, Ф): месяц (по умолчанию прошлый), «больше 2%» / «меньше 95%» словами | `src/pages/Reconciliation.tsx` | `getReconciliation`, `listDepartments` |
+| 11 Журналы: события (фильтры период/подразделение/решение/код/пометка), аудит («Система …», чип у `forbidden_access`, «Было / Стало» с «изменено»), уведомления (колонка «Внешний канал» скрыта, если у всех `disabled`) | `src/resources/{events,audit}/index.tsx`, `src/pages/Notifications.tsx` | `listEvents`, `listAudit`, `listNotifications`, `markNotificationRead` |
+| Колокольчик в шапке (А, В): число непрочитанных, опрос 60 с | `src/layout/{NotificationBell,BmLayout}.tsx` | `listNotifications?unread=true&page_size=1` |
+| Меню: «Импорт провайдеров» (А, Ф), «Отчёты» (все), «Журналы» (А, В) в порядке 13_design.md §4 | `src/layout/BmMenu.tsx`, `src/App.tsx` | — |
+
+Общие части:
+- `access/permissions.ts`: добавлены 15 операций, тест сверяет их с `x-roles`. Добавлена `canSeeImportScreen`: у владельца бюджета есть `getImportStatus`, но экрана 7 нет (В1).
+- `import/importHealth.ts`: правило SC-008 (позже 12:00 МСК и `last_success_day` раньше вчерашних суток UTC; «не загружалось ни разу» после полудня — тоже отставание), тексты §7.4, строки плашки с отличиями для В, `runsPollInterval`.
+- `budget/balanceMeter.ts`: геометрия шкалы в масштабе `max(лимит, расход + резервы)` в целых копейках (BigInt), `aria-label` шкалы, пометки под шкалой.
+- `components/NavTabs.tsx`: вкладки-ссылки с `aria-current` для экранов 7, 8, 11.
+- `dataProvider.ts`: 9 операций вне CRUD. `api/http.ts`: ответ `text/*` отдаётся строкой (CSV).
+- `theme/contrast.ts` и `__tests__/contrast.test.ts` (Ф1): формула WCAG 2.x без зависимостей, 13 пар §8 в обеих темах и 3 мягкие подложки светлой темы, всего 29 проверок. **Все пары проходят** (4,5:1 для текста, 3:1 для `border-strong`).
+- Тестовая обвязка `contractApi`: ответ с `contentType` (для `text/csv`, тип сверяется с контрактом). По умолчанию у А и В `listNotifications → {items: [], total: 0}`: колокольчик в шапке опрашивает его на любом экране.
+
+### Проверка тестами (TDD)
+
+- До реализации: `imports.test.tsx` — 21/21 красные, `dashboard.test.tsx` — 16/16 красные, `journals` + `reports` + `access` — 24 из 26 красные, `contrast.test.ts` — красный (нет модуля).
+- Мутационные проверки (вручную, изменения откатаны):
+  - опрос запусков всегда выключен → красный тест «опрос … останавливается»; опрос всегда включён → тот же тест красный;
+  - контраст без линеаризации sRGB → 24 красных;
+  - «занят подписками» по `share_pct = 100.0` вместо сумм → красный тест на 4 999,99 из 5 000 ₽ (В3);
+  - SC-008 без условия «после 12:00 МСК» → 2 красных.
+
+### Команды и вывод (сокращённо)
+
+```
+$ cd app/frontend && npx vitest run src/__tests__/imports.test.tsx     # до реализации
+      Tests  21 failed (21)
+$ npx vitest run src/__tests__/dashboard.test.tsx                     # до реализации
+      Tests  16 failed (16)
+$ npx vitest run                                                      # × 3
+ Test Files  28 passed (28)
+      Tests  360 passed (360)                                         # exit 0 во всех трёх прогонах
+$ npm run typecheck                                                   # exit 0
+$ npm run build
+dist/assets/index-*.js   1,285.44 kB │ gzip: 389.78 kB
+check-dist: внешних адресов нет (разрешённые namespace и тексты ошибок — см. scripts/check-dist.mjs).
+                                                                      # exit 0
+```
+
+### Отклонения
+
+1. **Явная зависимость `@tanstack/react-query` 5.104.2** в `package.json`. Пакет уже стоял в дереве как зависимость react-admin, версия та же, лицензия MIT. Нового кода в бандле нет. Он нужен для запросов вне CRUD (баланс, статус импорта, отчёты) с `refetchInterval`: опрос раз в 60 с при видимой вкладке работает через `refetchIntervalInBackground: false`.
+2. **«Было / Стало» в аудите раскрывается кнопкой в строке, а не стрелкой Datagrid.** У стрелки в react-admin 5 стоят `aria-hidden` и `tabIndex=-1`, поэтому с клавиатуры её не открыть (13_design.md §8). У кнопки есть `aria-expanded`.
+3. **Период аудита по умолчанию — последние 7 суток МСК.** В screens.md §11 значение не задано, а `from` и `to` обязательны.
+4. **CSV скачивается через `fetch`, а не прямой ссылкой.** Так показываются «Готовим файл…» и ошибка с «Повторить», как требует §8.1. К файлу добавляется BOM, если его нет: `fetch().text()` снимает BOM сервера.
+5. **Фильтр «Решение» в событиях** предлагает только `allow`, `redirect`, `deny` (enum `Outcome`). Значение `none` в `CallEvent` есть, а в фильтре контракта — нет.
+6. **Лента на панели** показывает до 5 непрочитанных и даёт ссылку «Все уведомления». У А для уведомления другого подразделения есть ссылка «Открыть панель подразделения».
+7. **«Сопоставить»** открывает форму источника с заполненными провайдером и `ref`. Поля можно изменить.
+8. **Старые тесты под новую панель.** `App.test.tsx` и `auth.screens.test.tsx` проверяли текст заглушки «Вы вошли как …». Теперь они проверяют меню и пустое состояние панели. Ключ `bm.app.signed_in_as` удалён.
+9. Бандл вырос до 1 285 кБ (390 кБ gzip). Экраны готовы все, разделение на чанки (`React.lazy`) — кандидат на доводку перед релизом.
+
+### Изменённые и новые файлы (только `app/frontend/`, плюс `[x]` в `12_tasks.md`)
+
+- Новые:
+  - `src/pages/{ImportStatus,Reports,Reconciliation,Notifications}.tsx`
+  - `src/resources/providerSources/{index,ImportRunList}.tsx`, `src/resources/{events,audit}/index.tsx`
+  - `src/layout/NotificationBell.tsx`, `src/components/NavTabs.tsx`
+  - `src/import/importHealth.ts`, `src/budget/balanceMeter.ts`, `src/theme/contrast.ts`
+- Тесты:
+  - `src/__tests__/{imports,dashboard,reports,journals}.test.tsx`
+  - `src/__tests__/{importHealth,balanceMeter,contrast}.test.ts`
+  - фикстуры в `support/fixtures.ts`
+- Изменены:
+  - `src/pages/Dashboard.tsx` (вместо заглушки), `src/components/PeriodBudgetMeter.tsx`
+  - `src/App.tsx`, `src/layout/{BmMenu,BmLayout}.tsx`, `src/access/permissions.ts`, `src/dataProvider.ts`, `src/api/http.ts`
+  - `src/format/date.ts`, `src/i18n/ru.ts`, `src/resources/employees/index.tsx` (экспорт `PseudonymTag`)
+  - `package.json`, `package-lock.json`
+  - тесты `access`, `App`, `auth.screens`, `support/contractApi.ts`
+
+### Вопросы техлиду
+
+1. Принять отклонения 1 (явная `@tanstack/react-query`) и 2 (кнопка «Было / Стало» вместо стрелки Datagrid)?
+2. Для backend T061/T071, к сведению. Экраны рассчитывают на следующее:
+   - `getSpendCsv` отвечает `text/csv`;
+   - `group_by` приходит одной строкой через запятую (`style: form, explode: false`);
+   - `listDepartmentBalanceItems` принимает `page`/`page_size`;
+   - для `budget_owner` `getImportStatus` отдаёт `unallocated_sources = []` и `last_error_class = null` (В1).
+
+   Всё это есть в контракте 1.0.2.
+3. Для дизайнера, к сведению: значение периода аудита по умолчанию в screens.md §11 не задано (см. отклонение 3).

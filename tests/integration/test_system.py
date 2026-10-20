@@ -46,11 +46,11 @@ async def test_metrics_prometheus_text(client: httpx.AsyncClient) -> None:
         "decision_latency_seconds",
         "decisions_total",
         "reports_total",
-        "reservations_open",
         "import_lag_hours",
         "job_failures_total",
     ):
         assert name in resp.text, name
+    assert "reservations_open" not in resp.text  # убрана (14_tech_rulings.md, пакет 2, В1-6)
     assert_matches_contract(resp, "metrics")
 
 

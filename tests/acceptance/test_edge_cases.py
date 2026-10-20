@@ -5,7 +5,7 @@ subject_unknown, model_unknown, модель удалена из разрешё�
 отказ без ключа и лишние поля (принцип I).
 
 Написаны до реализации; пометка xfail модуля снята в T021.
-Тест подписок дополнительно помечен T051 — амортизация в decide делается там.
+Тест подписок ≥ 100% ждал T051 (амортизация в decide); пометка снята в T051.
 """
 
 from datetime import date
@@ -164,9 +164,6 @@ async def test_negative_remaining_without_zero_price_denies(
     assert d["applied_limit"]["remaining_rub"] == "-500.00"
 
 
-@pytest.mark.xfail(
-    strict=True, raises=(AssertionError, ImportError), reason="T051: амортизация подписок в decide"
-)
 async def test_subscriptions_over_100_percent_block_paid_calls(
     client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection
 ) -> None:

@@ -13,7 +13,7 @@
 import hashlib
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -23,7 +23,7 @@ import asyncpg
 
 from bm import metrics
 from bm.access import audit
-from bm.budget import repo
+from bm.budget import repo, subs
 from bm.budget.errors import (
     BudgetError,
     DecisionNotFound,
@@ -163,6 +163,12 @@ class Budget:
         self._timeout_ms = timeout_ms
         self._default_fail_mode = default_fail_mode
         self._snapshots = snapshots or SnapshotCache()
+        self._month_totals: dict[subs.MonthKey, subs.MonthTotal] = {}  # M месяцев неизменяемы (T051)
+
+    @property
+    def pool(self) -> asyncpg.Pool:
+        """Пул соединений процесса (задачи worker: подписки, импорт)."""
+        return self._pool
 
     # ------------------------------------------------------------ служебное
 
@@ -244,16 +250,29 @@ class Budget:
             )
         return specs
 
+    async def _amort(
+        self, conn: asyncpg.Connection, snap: ConfigSnapshot, specs: Sequence[_LimitSpec], now: datetime
+    ) -> dict[tuple[str, UUID, PeriodKind], Kop]:
+        """Амортизация подписок по лимитам: дни периода по `now` включительно (FR-026, T051).
+
+        M месяца — из `subscription_month` (первый расчёт фиксирует её); прочитанные M кэшируются в процессе.
+        """
+        today = msk_date(now)
+        windows = {(s.owner_type, s.owner_id, s.period): (bounds(s.period, now).start, today) for s in specs}
+        return await subs.window_amounts(conn, snap, windows, cache=self._month_totals)
+
     @staticmethod
     async def _states(
         conn: asyncpg.Connection,
         specs: Sequence[_LimitSpec],
         reserved: dict[Owner, Kop],
         now: datetime,
+        amort: Mapping[tuple[str, UUID, PeriodKind], Kop] | None = None,
     ) -> list[LimitState]:
-        """Состояние лимитов по FR-026. Амортизация подписок — T051 (пока 0)."""
+        """Состояние лимитов по FR-026; `amort` — амортизация подписок по (владелец, период) из `_amort`."""
         if not specs:
             return []
+        amort = amort or {}
         today = msk_date(now)
         periods = {k: bounds(k, now) for k in {s.period for s in specs}}
         owners = sorted({(s.owner_type, s.owner_id) for s in specs})
@@ -269,7 +288,7 @@ class Budget:
                     limit=s.limit,
                     spent_token=sp.token,
                     spent_import=sp.import_,
-                    amort=0,
+                    amort=amort.get((s.owner_type, s.owner_id, s.period), 0),
                     reserved=reserved.get((s.owner_type, s.owner_id), 0),
                 )
             )
@@ -299,7 +318,9 @@ class Budget:
                 else:
                     dept = subj.department
                     reserved = await repo.lock_owners(conn, subj.owners)
-                    limits = await self._states(conn, self._limit_specs(snap, subj), reserved, now)
+                    specs = self._limit_specs(snap, subj)
+                    amort = await self._amort(conn, snap, specs, now)
+                    limits = await self._states(conn, specs, reserved, now, amort)
                     fx = self._fx(snap, today)
                     needs = cmd.needs
                     req = DecisionInput(
@@ -718,7 +739,6 @@ class Budget:
                         closed += 1
                 if len(due) < 500:
                     break
-            metrics.RESERVATIONS_OPEN.set(await repo.open_reserves(conn))
         if closed:
             log.info("reserves_expired", extra={"count": closed})
         return closed
@@ -763,9 +783,11 @@ class Budget:
         self, conn: asyncpg.Connection, snap: ConfigSnapshot, subj: _Subject, now: datetime
     ) -> BalanceReport:
         specs = self._limit_specs(snap, subj)
+        # M месяца фиксируется до транзакции чтения: она только для чтения, а M неизменяема
+        amort = await self._amort(conn, snap, specs, now)
         async with conn.transaction(isolation="repeatable_read", readonly=True):
             reserved = await repo.reserved_of(conn, subj.owners)
-            states = await self._states(conn, specs, reserved, now)
+            states = await self._states(conn, specs, reserved, now, amort)
         emp = subj.employee
         return BalanceReport(
             as_of=_msk(now),
@@ -778,7 +800,8 @@ class Budget:
 
     @staticmethod
     def _limit_balance(s: LimitState) -> LimitBalance:
-        used = s.limit - s.remaining
+        """14_tech_rulings.md, пакет 2, В1-5: процент и перерасход — по расходу без резервов (T071)."""
+        used = s.spent_token + s.spent_import + s.amort
         return LimitBalance(
             owner_type=s.owner_type,
             owner_ref=s.owner_ref,
@@ -794,6 +817,6 @@ class Budget:
             reserved_rub=kop_to_str(s.reserved),
             remaining_rub=kop_to_str(s.remaining),
             used_pct=_pct(used, s.limit),
-            over_limit=s.remaining < 0,
+            over_limit=used > s.limit,
             subscriptions_share_pct=_pct(s.amort, s.limit),
         )

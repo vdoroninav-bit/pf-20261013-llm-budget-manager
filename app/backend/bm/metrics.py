@@ -4,6 +4,8 @@
 пишет значения в файлы этого каталога, а `/metrics` собирает их всех (`MultiProcessCollector`): счётчики
 и гистограммы суммируются, у gauge режим агрегации задан явно (`mostrecent` — последнее записанное значение).
 Каталог очищается при старте контейнера (tmpfs, T087). Без переменной — метрики одного процесса.
+Gauge открытых резервов убран (14_tech_rulings.md, пакет 2, В1-6): его ставил worker,
+а `/metrics` отдаёт `api`.
 """
 
 import os
@@ -30,11 +32,6 @@ DECISION_LATENCY = Histogram(
 )
 DECISIONS = Counter("decisions_total", "Решения по исходу и коду", ["outcome", "code"])
 REPORTS = Counter("reports_total", "Отчёты о расходе по статусу обработки", ["status"])
-RESERVATIONS_OPEN = Gauge(
-    "reservations_open",
-    "Открытые резервы (по данным последнего прохода worker)",
-    multiprocess_mode="mostrecent",
-)
 IMPORT_LAG_HOURS = Gauge(
     "import_lag_hours", "Отставание импорта провайдера, часов", ["provider"], multiprocess_mode="mostrecent"
 )

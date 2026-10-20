@@ -128,3 +128,178 @@ export const subscriptionPreview = (
   fx_warning: null,
   ...over,
 });
+
+// ---- T064: импорт провайдеров
+export const SRC_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+export const RUN_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1';
+
+type ProviderStatus = Schemas['ImportStatus']['providers'][number];
+export const providerStatus = (over: Partial<ProviderStatus> = {}): ProviderStatus => ({
+  provider: 'anthropic',
+  configured: true,
+  last_success_day: '2026-10-13',
+  last_run_at: '2026-10-14T09:00:00+03:00',
+  lag_hours: 16,
+  consecutive_failures: 0,
+  last_error_class: null,
+  unallocated_sources: [],
+  ...over,
+});
+
+export const importStatus = (over: Partial<Schemas['ImportStatus']> = {}): Schemas['ImportStatus'] => ({
+  enabled: true,
+  providers: [providerStatus(), providerStatus({ provider: 'openai', configured: false, last_success_day: null, last_run_at: null, lag_hours: null })],
+  ...over,
+});
+
+export const providerSource = (over: Partial<Schemas['ProviderSource']> = {}): Schemas['ProviderSource'] => ({
+  id: SRC_ID,
+  provider: 'anthropic',
+  kind: 'workspace',
+  ref: 'wrkspc_01AbC',
+  display_name: 'Маркетинг — Claude',
+  department_id: DEP_ID,
+  mode: 'import',
+  ...over,
+});
+
+export const importRun = (over: Partial<Schemas['ImportRun']> = {}): Schemas['ImportRun'] => ({
+  id: RUN_ID,
+  provider: 'anthropic',
+  status: 'ok',
+  started_at: '2026-10-14T09:00:00+03:00',
+  finished_at: '2026-10-14T09:01:30+03:00',
+  day_from: '2026-10-11',
+  day_to: '2026-10-13',
+  lines_charged: 42,
+  lines_reconcile: 5,
+  lines_unallocated: 1,
+  lines_changed: 0,
+  error_class: null,
+  ...over,
+});
+
+// ---- T072: панель, отчёты, журналы
+type LimitBalance = Schemas['LimitBalance'];
+export const limitBalance = (over: Partial<LimitBalance> = {}): LimitBalance => ({
+  owner_type: 'department',
+  owner_ref: DEP_ID,
+  period: 'month',
+  period_start: '2026-10-01T00:00:00+03:00',
+  resets_at: '2026-11-01T00:00:00+03:00',
+  limit_rub: '60000.00',
+  spent: { subscriptions_rub: '18540.00', import_rub: '12007.30', token_rub: '29950.10' },
+  reserved_rub: '623.00',
+  remaining_rub: '-1120.40',
+  used_pct: '100.8',
+  over_limit: true,
+  subscriptions_share_pct: '30.9',
+  ...over,
+});
+
+export const balanceReport = (over: Partial<Schemas['BalanceReport']> = {}): Schemas['BalanceReport'] => ({
+  as_of: '2026-10-14T16:20:00+03:00',
+  owner_type: 'department',
+  owner_ref: DEP_ID,
+  department_id: DEP_ID,
+  policy_mode: 'enforce',
+  limits: [
+    limitBalance({
+      period: 'day',
+      period_start: '2026-10-14T00:00:00+03:00',
+      resets_at: '2026-10-15T00:00:00+03:00',
+      limit_rub: '5000.00',
+      spent: { subscriptions_rub: '598.06', import_rub: '0.00', token_rub: '3161.94' },
+      reserved_rub: '0.00',
+      remaining_rub: '1240.00',
+      used_pct: '75.2',
+      over_limit: false,
+      subscriptions_share_pct: '12.0',
+    }),
+    limitBalance(),
+  ],
+  ...over,
+});
+
+export const balanceItem = (over: Partial<Schemas['BalanceItem']> = {}): Schemas['BalanceItem'] => ({
+  source: 'token',
+  ref_id: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1',
+  date: '2026-10-14',
+  model_id: 'gigachat-pro',
+  subject_pseudonym: 'emp-7f3a9c01b2',
+  amount_rub: '125.40',
+  flags: ['no_report'],
+  ...over,
+});
+
+export const spendRow = (over: Partial<Schemas['SpendRow']> = {}): Schemas['SpendRow'] => ({
+  period_start: null,
+  department_id: DEP_ID,
+  department_name: 'Маркетинг',
+  model_id: 'gigachat-pro',
+  source: 'token',
+  amount_rub: '24300.10',
+  original_currency: null,
+  original_amount: null,
+  late: false,
+  ...over,
+});
+
+export const NOTE_ID = 'dddddddd-dddd-4ddd-8ddd-ddddddddddd1';
+export const notification = (over: Partial<Schemas['Notification']> = {}): Schemas['Notification'] => ({
+  id: NOTE_ID,
+  kind: 'threshold_80',
+  department_id: DEP_ID,
+  period: 'month',
+  period_start: '2026-10-01',
+  message: 'Маркетинг: израсходовано 80% месячного лимита',
+  created_at: '2026-10-14T11:02:00+03:00',
+  read: false,
+  webhook_status: 'disabled',
+  ...over,
+});
+
+export const callEvent = (over: Partial<Schemas['CallEvent']> = {}): Schemas['CallEvent'] => ({
+  id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee1',
+  created_at: '2026-10-14T10:15:00+03:00',
+  caller_name: 'Шлюз платформы',
+  subject_pseudonym: 'emp-7f3a9c01b2',
+  department_id: DEP_ID,
+  requested_model: 'claude-sonnet',
+  final_model: 'gigachat-pro',
+  outcome: 'redirect',
+  code: 'budget_exceeded',
+  reserve_rub: '12.00',
+  fact_rub: '9.75',
+  tokens: { input: 1200, output: 350, cached: 0 },
+  status: 'settled',
+  flags: ['decision_not_followed'],
+  expense_date: '2026-10-14',
+  ...over,
+});
+
+export const auditEntry = (over: Partial<Schemas['AuditEntry']> = {}): Schemas['AuditEntry'] => ({
+  id: 101,
+  at: '2026-10-14T10:00:00+03:00',
+  actor: 'admin',
+  action: 'update',
+  object_type: 'department',
+  object_id: DEP_ID,
+  // В schema.d.ts before/after — объект без описанных свойств (Record<string, never>): в контракте это свободный JSON.
+  before: { policy_mode: 'observe', name: 'Маркетинг' } as never,
+  after: { policy_mode: 'enforce', name: 'Маркетинг' } as never,
+  ...over,
+});
+
+export const reconRow = (over: Partial<Schemas['ReconciliationRow']> = {}): Schemas['ReconciliationRow'] => ({
+  month: '2026-09',
+  provider: 'anthropic',
+  source_ref: 'wrkspc_01AbC',
+  department_id: DEP_ID,
+  imported_rub: '10000.00',
+  decision_api_rub: '9850.00',
+  diff_rub: '150.00',
+  diff_pct: '1.5',
+  coverage_pct: '98.5',
+  ...over,
+});

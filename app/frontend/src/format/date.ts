@@ -87,3 +87,46 @@ export function previousMonth(month: string): string {
   const m = Number(month.slice(5, 7));
   return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
 }
+
+const shortDateTime = new Intl.DateTimeFormat('ru-RU', {
+  timeZone: MSK,
+  day: '2-digit',
+  month: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+/** ISO date-time → «01.11, 00:00 МСК» (сброс периода на панели, design/screens.md §2). */
+export function formatShortMsk(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${shortDateTime.format(d)} МСК`;
+}
+
+/** Дата начала периода по МСК в формате контракта (format: date): «2026-10-01T00:00:00+03:00» → «2026-10-01». */
+export function mskDateOf(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso.slice(0, 10) : todayMsk(d);
+}
+
+/** Сдвиг даты контракта на n суток: «2026-10-14», -6 → «2026-10-08». Без часовых поясов. */
+export function addDays(date: string, n: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/** Последний день месяца: «2026-09» → «2026-09-30». */
+export function lastDayOfMonth(month: string): string {
+  const y = Number(month.slice(0, 4));
+  const m = Number(month.slice(5, 7));
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}
+
+/** Понедельник недели даты (календарная неделя МСК начинается с понедельника). */
+export function mondayOf(date: string): string {
+  const day = new Date(`${date}T00:00:00Z`).getUTCDay(); // 0 — воскресенье
+  return addDays(date, day === 0 ? -6 : 1 - day);
+}

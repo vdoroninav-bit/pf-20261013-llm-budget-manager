@@ -8,7 +8,7 @@ tests/acceptance/test_us3_config.py::test_reveal_pseudonym_admin_only_and_audite
 - Маркетинг: A — 30,00 ₽ (1 000/400), C — 5,00 ₽ (1 000/400);
 - Разработка: A — 70,00 ₽ (2 000/1 000) и импорт Anthropic 13.10 — 2,00 $ × 95,50 = 191,00 ₽.
 
-Написаны до реализации (T071).
+Написаны до реализации (T071); реализация — T071.
 """
 
 import csv
@@ -41,14 +41,21 @@ from tests.fixtures.qa import (
 )
 from tests.fixtures.seed import Emp, Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T071: отчёты, баланс подразделения, журналы",
-    ),
-]
+pytestmark = pytest.mark.db
+
+# T071 реализована; оставшиеся точечные xfail — не в коде отчётов (14_dev_backend.md, Backend 2, вопросы техлиду).
+SEED_DEFECT = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="Дефект засева (QA): сотрудники user1, user2 засеяны после первого решения без bump_config — "
+    "снимок конфигурации их не видит (subject_unknown). Проверка CSV-инъекции покрыта "
+    "tests/integration/test_reports.py::test_csv_neutralizes_formula_prefixes",
+)
+T061_AUDIT = pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="T061: createProviderSource/updateProviderSource не пишут audit_log",
+)
 
 CSV_HEADER = "period_start;department;model;source;amount_rub;original_currency;original_amount"
 PSEUDONYM = re.compile(r"emp-[0-9a-f]{10}")
@@ -222,6 +229,7 @@ async def test_6_2_finance_viewer_csv_without_employee_identifiers(
         assert change.status_code == 403  # изменять настройки финансист не может
 
 
+@SEED_DEFECT
 async def test_6_2_csv_injection_is_neutralized(
     client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection
 ) -> None:
@@ -318,6 +326,7 @@ async def test_6_3_thresholds_80_and_100_notify_once_per_period(
 # ---------------------------------------------------------------- 6.5 аудит изменений
 
 
+@T061_AUDIT
 async def test_6_5_audit_records_who_when_before_after(
     client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection
 ) -> None:

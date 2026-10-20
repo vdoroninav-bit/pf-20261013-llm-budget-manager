@@ -1,8 +1,10 @@
-// Шкала бюджета периода (13_design.md §6, PeriodBudgetMeter). В T052 — вариант compact с сегментом подписок
-// для предпросмотра; полный вариант (импорт, токены, резервы, перерасход, отметка 80%, легенда) добавит T072.
+// Шкала бюджета периода (13_design.md §6, PeriodBudgetMeter): compact — предпросмотр подписки (T052),
+// BalanceMeter — полный вариант панели (T072): источники, резервы, перерасход, отметки 80% и лимита.
 // Ширина сегмента считается в тысячных целыми числами (sharePermille), без float над деньгами.
 import { Box } from '@mui/material';
 import { sharePermille } from '../budget/subscriptionShare';
+import { meterLabel, meterLayout, type MeterSource } from '../budget/balanceMeter';
+import type { Schemas } from '../api/types';
 
 export interface MeterSegment {
   source: 'subscription';
@@ -49,6 +51,74 @@ export function PeriodBudgetMeter({ label, limit, segments }: PeriodBudgetMeterP
           }}
         />
       ))}
+    </Box>
+  );
+}
+
+const FULL_COLOR: Record<MeterSource, string> = {
+  subscription: 'var(--bm-color-src-subscription)',
+  import: 'var(--bm-color-src-import)',
+  token: 'var(--bm-color-src-token)',
+  // Резерв — штриховка, не только цвет (13_design.md §8, WCAG 1.4.1).
+  reservation: 'var(--bm-pattern-reservation-hatch)',
+};
+
+/**
+ * Полная шкала периода (T072): подписки, импорт, токены, резервы (штриховка), отметка 80% и лимита,
+ * перерасход — штриховка за отметкой лимита. Числа рядом выводит панель; шкала дублирует их в aria-label.
+ */
+export function BalanceMeter({ balance }: { balance: Schemas['LimitBalance'] }) {
+  const layout = meterLayout(balance);
+  const pct = (permille: number) => `${permille / 10}%`;
+  return (
+    <Box
+      role="img"
+      aria-label={meterLabel(balance)}
+      sx={{
+        position: 'relative',
+        height: 'var(--bm-size-meter-height, 20px)',
+        minWidth: 160,
+        background: 'var(--bm-color-meter-track)',
+      }}
+    >
+      <Box sx={{ display: 'flex', gap: 'var(--bm-border-meter-gap, 2px)', height: '100%' }}>
+        {layout.segments
+          .filter((s) => s.permille > 0)
+          .map((s) => (
+            <Box
+              key={s.source}
+              data-source={s.source}
+              sx={{ width: pct(s.permille), background: FULL_COLOR[s.source], flex: '0 0 auto' }}
+            />
+          ))}
+      </Box>
+      {layout.overFrom !== null && (
+        <Box
+          data-over
+          sx={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: pct(layout.overFrom),
+            right: 0,
+            background: 'var(--bm-pattern-over-hatch)',
+          }}
+        />
+      )}
+      <Box
+        data-threshold
+        sx={{
+          position: 'absolute',
+          top: -2,
+          bottom: -2,
+          left: pct(layout.thresholdAt),
+          borderLeft: '2px dashed var(--bm-color-meter-threshold)',
+        }}
+      />
+      <Box
+        data-limit
+        sx={{ position: 'absolute', top: -4, bottom: -4, left: pct(layout.limitAt), borderLeft: '2px solid var(--bm-color-text)' }}
+      />
     </Box>
   );
 }

@@ -23,14 +23,7 @@ from tests.fixtures.imports import (
 from tests.fixtures.qa import one
 from tests.fixtures.seed import Seed
 
-pytestmark = [
-    pytest.mark.db,
-    pytest.mark.xfail(
-        strict=True,
-        raises=(AssertionError, ImportError),
-        reason="T061: конвейер импорта и справочник источников",
-    ),
-]
+pytestmark = [pytest.mark.db]
 
 OCT13 = date(2026, 10, 13)
 

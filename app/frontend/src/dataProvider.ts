@@ -91,7 +91,29 @@ export interface BmOperations {
   previewSubscription(body: Schemas['SubscriptionCreate']): Promise<Schemas['SubscriptionPreview']>;
   endSubscription(subscriptionId: Identifier, endDate: string): Promise<Schemas['Subscription']>;
   putFxRate(month: string, usdRub: string): Promise<Schemas['FxRate']>;
+  // T064 — импорт провайдеров
+  getImportStatus(): Promise<Schemas['ImportStatus']>;
+  runImport(body: Schemas['ImportRunRequest']): Promise<Schemas['ImportRun']>;
+  // T072 — панель, отчёты, уведомления
+  getDepartmentBalance(departmentId: Identifier): Promise<Schemas['BalanceReport']>;
+  listDepartmentBalanceItems(
+    departmentId: Identifier,
+    query: { period: Schemas['PeriodKind']; source?: Schemas['SpendSource']; page?: number; page_size?: number },
+  ): Promise<{ items: Schemas['BalanceItem'][]; total: number }>;
+  getSpendReport(query: SpendQuery & { group_by?: SpendGroup[] }): Promise<{ items: Schemas['SpendRow'][]; total_rub: string }>;
+  /** CSV расхода (text/csv) строкой — файл собирает экран. */
+  getSpendCsv(query: SpendQuery): Promise<string>;
+  getReconciliation(month: string): Promise<Schemas['ReconciliationRow'][]>;
+  markNotificationRead(notificationId: Identifier): Promise<void>;
 }
+
+/** Период и подразделение отчёта расхода: from/to — даты, to включительно; department_id — uuid или «unallocated». */
+export interface SpendQuery {
+  from: string;
+  to: string;
+  department_id?: string;
+}
+export type SpendGroup = 'department' | 'model' | 'source' | 'day' | 'month';
 
 export type BmDataProvider = DataProvider & BmOperations;
 
@@ -158,6 +180,46 @@ export function createDataProvider(http: HttpClient): BmDataProvider {
       const put: Schemas['FxRatePut'] = { usd_rub: usdRub };
       const { body } = await http.request<Schemas['FxRate']>('PUT', `/fx-rates/${seg(month)}`, { body: put });
       return required(body, 'putFxRate');
+    },
+    async getImportStatus() {
+      const { body } = await http.request<Schemas['ImportStatus']>('GET', '/imports/status');
+      return required(body, 'getImportStatus');
+    },
+    async runImport(run) {
+      const { body } = await http.request<Schemas['ImportRun']>('POST', '/imports/run', { body: run });
+      return required(body, 'runImport');
+    },
+    async getDepartmentBalance(departmentId) {
+      const { body } = await http.request<Schemas['BalanceReport']>('GET', `/departments/${seg(departmentId)}/balance`);
+      return required(body, 'getDepartmentBalance');
+    },
+    async listDepartmentBalanceItems(departmentId, query) {
+      const { body } = await http.request<{ items: Schemas['BalanceItem'][]; total: number }>(
+        'GET',
+        `/departments/${seg(departmentId)}/balance/items`,
+        { query },
+      );
+      return required(body, 'listDepartmentBalanceItems');
+    },
+    async getSpendReport({ group_by, ...query }) {
+      // group_by: style=form, explode=false — одно значение через запятую.
+      const { body } = await http.request<{ items: Schemas['SpendRow'][]; total_rub: string }>('GET', '/reports/spend', {
+        query: { ...query, group_by: group_by?.length ? group_by.join(',') : undefined },
+      });
+      return required(body, 'getSpendReport');
+    },
+    async getSpendCsv(query) {
+      const { body } = await http.request<string>('GET', '/reports/spend.csv', { query: { ...query } });
+      return required(body, 'getSpendCsv');
+    },
+    async getReconciliation(month) {
+      const { body } = await http.request<{ items: Schemas['ReconciliationRow'][] }>('GET', '/reports/reconciliation', {
+        query: { month },
+      });
+      return required(body, 'getReconciliation').items;
+    },
+    async markNotificationRead(notificationId) {
+      await http.request('POST', `/notifications/${seg(notificationId)}/read`);
     },
   };
 

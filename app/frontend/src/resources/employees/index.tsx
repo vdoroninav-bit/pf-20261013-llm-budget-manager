@@ -66,7 +66,7 @@ export function EmployeesOfDepartment() {
 }
 
 /** PseudonymTag (13_design.md §6): у администратора — «Кто это?» с записью в аудит. Значение не кэшируется. */
-function PseudonymTag({ pseudonym }: { pseudonym: string }) {
+export function PseudonymTag({ pseudonym }: { pseudonym: string }) {
   const role = useRole();
   const dp = useDataProvider<BmDataProvider>();
   const [asking, setAsking] = useState(false);

@@ -9,8 +9,8 @@
 Сценарий 3.6 (model_unknown) — tests/acceptance/test_edge_cases.py::test_model_unknown (T020).
 
 Нумерация строк в сводке импорта: строка файла, заголовок — строка 1.
-Написаны до реализации (T041, T042). После T041/T042 пометка xfail снята с модуля и оставлена только
-у `test_removed_employee_keeps_period_spend` — ждёт `getDepartmentBalance` (T071). В
+Написаны до реализации (T041, T042). Последняя пометка xfail (`test_removed_employee_keeps_period_spend`,
+ждал `getDepartmentBalance`) снята в T071. В
 `test_3_5_new_price_from_15th_old_events_unchanged` после `clock.set(15-е 10:00)` выполняется повторный вход:
 сессия админки живёт 12 ч.
 """
@@ -194,11 +194,6 @@ async def test_import_file_too_large_is_413(
     assert await db.fetchval("SELECT count(*) FROM department") == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="T071: getDepartmentBalance (/departments/{id}/balance) ещё не реализована",
-)
 async def test_removed_employee_keeps_period_spend(
     client: httpx.AsyncClient, admin: dict[str, str], db: asyncpg.Connection, seed: Seed
 ) -> None:

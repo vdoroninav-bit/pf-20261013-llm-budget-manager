@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
-import { AppBar, Layout, Logout, UserMenu, MenuItemLink } from 'react-admin';
+import { AppBar, Layout, LoadingIndicator, Logout, ToggleThemeButton, UserMenu, MenuItemLink } from 'react-admin';
 import LockResetIcon from '@mui/icons-material/LockReset';
 import { BmMenu } from './BmMenu';
+import { NotificationBell } from './NotificationBell';
 import { ThemeAttributeSync } from './ThemeAttributeSync';
 import { PASSWORD_ROUTE } from '../authProvider';
 import { ru } from '../i18n/ru';
@@ -16,7 +17,19 @@ function BmUserMenu() {
   );
 }
 
-const BmAppBar = () => <AppBar userMenu={<BmUserMenu />} />;
+/** Шапка (13_design.md §4): колокольчик уведомлений (А, В), переключатель темы, обновление, меню пользователя. */
+const BmAppBar = () => (
+  <AppBar
+    userMenu={<BmUserMenu />}
+    toolbar={
+      <>
+        <NotificationBell />
+        <ToggleThemeButton />
+        <LoadingIndicator />
+      </>
+    }
+  />
+);
 
 export function BmLayout({ children }: { children: ReactNode }) {
   return (
