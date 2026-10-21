@@ -525,13 +525,14 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
     - `test_serve.py`: `connection_made` ставит TCP_NODELAY на TCP-сокет и не падает на не-TCP.
   - Работа (DevOps): `CMD` образа и `stack.sh` запускают `api` через `python -m bm.serve`, число воркеров — из `UVICORN_WORKERS` (по умолчанию 2, как сейчас); статический тест: ни `CMD`, ни `stack.sh` не вызывают `uvicorn … --workers` напрямую.
   - Тайм-аут `budget_client` по умолчанию (50 мс) **не меняется** (FR-006, сценарий 8 US1).
+  - [x] Часть Backend 2 выполнена 2026-10-21 (`14_dev_backend.md`). Красная фаза: медиана 43,95 мс; с `bm.serve` — 0,45 мс. `budget_client`, 200 решений, 2 воркера: 0 `fail_open`, p95 6,65 мс. `make test`: 797 passed, 1 skipped.
   - Готово:
     - Backend 2: вывод красной фазы регресс-теста; `make test` (своя БД `bm_test_b2`) зелёный;
     - DevOps: статический тест и `make up-local` с новым запуском (`make smoke` PASS);
     - приёмка — повтор T086 QA на локальном стеке с 2 воркерами: `make up-local && make load BM_STACK=local`, 50 rps × 600 с, без параллельных прогонов — **SC-001 PASS**: у клиента p95 ≤ 20 мс; внутри (`/metrics`) ≥ 95% решений ≤ 10 мс, p99 ≤ 25 мс; плюс 200 решений эталонным `budget_client` с тайм-аутом по умолчанию — 0 `fail_open` по тайм-ауту. Статус гейта SC-001 — PASS-замена (не эталонный стенд);
     - в CI релизного SHA регресс-тест входит в `make test`.
   - Зависимости: T087, T093.
-- [ ] **T099 [—] [devops] Trivy CRITICAL: `certifi` 2026.6.17 в образе** (14_tech_rulings.md, пакет 5, 5Д3, 5Д5).
+- [x] **T099 [—] [devops] Trivy CRITICAL: `certifi` 2026.6.17 в образе** (14_tech_rulings.md, пакет 5, 5Д3, 5Д5).
   - Файлы: `deploy/Dockerfile`; при необходимости — `deploy/ci/check.sh`, статический тест Dockerfile в `tests/deploy/`.
   - Работа:
     - выяснить источник: путь файла, по которому Trivy нашёл `certifi` 2026.6.17 (`trivy image --format json` → `Results[].Target`, `Packages[].FilePath`, либо `--list-all-pkgs`), и какому пакету или стадии он принадлежит. Кандидаты [Гипотеза]: `pip` базового образа `python:3.13-slim`, который наследует стадия `python-runtime`, или другой `site-packages` базового образа. `/app/.venv` собирается `uv sync --frozen` и должен содержать 2026.10.19 — проверить. Путь и вывод — в `14_devops.md`;
@@ -539,6 +540,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
     - **запрещено:** `.trivyignore`, `--ignore-unfixed`, понижение порога или иное исключение для CRITICAL;
     - попутно: закрепить digest базовых образов из аннотации прогона `34d28d0` (4Д1 (2)); выписать идентификаторы advisory npm (7 moderate, `decode-uri-component` через react-admin) из `npm audit --json` в `14_devops.md` — они идут в `16_release.md` как известное ограничение (5Д5).
   - Готово: в журнале CI для релизного SHA `CHECK_STRICT=1 make check` — exit 0, Trivy `CRITICAL: 0`; в `14_devops.md` — найденный путь и причина.
+  - Статус (DevOps, 2026-10-21): исправление по источнику сделано (`pip` базового образа удалён из `python-runtime`), digest закреплены по прогону `899cf1e`, advisory npm выписаны; окончательно — по аннотациям CI релизного SHA (Trivy `CRITICAL: 0`, notice «Trivy: CRITICAL и путь certifi»). Отчёт — `14_devops.md`, раздел пакета 5.
   - Зависимости: T088, T092.
 - [ ] **T089 [—] [qa] Релизный прогон и гейты.**
   - Работа: `make test` (на `bm_test`, без параллельных прогонов), `make up`, `make smoke`, `make load`, `make failover`, `make check`, `make egress-host-check` (стенд QA), тест восстановления, установка по руководству. `make egress-host-check` проводится при пустом `IMPORT_HTTPS_PROXY` и `IMPORT_ENABLED=false`.

@@ -505,3 +505,118 @@ E501 app/backend/bm/main.py:53, app/backend/bm/notify/channels.py:10, :12   → 
 
 1. T096 и T097 — выпускать вместе с этими правками на релизном SHA? Иначе smoke останется FAIL (4Д6), а прокси из файла не прочитается (отклонение 3).
 2. Устраивает ли разнесение цепочки по шагам (отклонение 2) как форма гейта «`make up && make smoke && make backup && make restore && make smoke`»? Порядок и команды прежние.
+
+## 2026-10-21 — пакет 5: T099 (Trivy CRITICAL certifi), часть DevOps в T098, 5Д5, 5Д7, 5Д8 (1)
+
+**Итог.** Источник `certifi` 2026.6.17 — `pip` базового образа `python:3.13-slim` (вложенный `pip/_vendor/certifi`), который стадия `python-runtime` наследовала целиком [Вывод, подтверждение — notice CI]. `pip` из рантайма удалён; сборка падает, если `pip` или пакет `certifi` остались вне `/app/.venv`. Digest базовых образов закреплены по аннотации прогона `899cf1e`. В CI — `::notice` с путём каждой установки `certifi` (Target/FilePath) в `bm:local` и в базовом образе при любом исходе `make check`. npm: гейт только critical, 7 moderate — `WARN` с перечнем advisory. `CMD` и `stack.sh` — `python -m bm.serve`. Цель `load` — в зоне DevOps. `make test` (bm_test_devops) — exit 0, `make lint` — 0, `actionlint` (с shellcheck) — 0. T099 — `[x]` по исправлению источника; окончательно — по CI релизного SHA.
+
+Контекст: правки прерванной попытки на CI `899cf1e` не попали (не были закоммичены) — там `CHECK_STRICT=1 make check` упал на той же находке, остальная поставка PASS (со слов оркестратора).
+
+### T099: источник certifi 2026.6.17
+
+| Что | Результат |
+|---|---|
+| `/app/.venv` | `uv.lock`: `certifi` 2026.10.19, в коммите `34d28d0` — тоже 2026.10.19 (`git show 34d28d0:app/backend/uv.lock`) [Факт]. Окружение собирается `uv sync --frozen`, `pip` в него не ставится (uv-venv без seed) [Вывод] |
+| Стадия `python-runtime` | `FROM ${PYTHON_IMAGE}` — наследует весь `site-packages` базового образа, в том числе `pip` и `ensurepip/_bundled/pip-*.whl`; `python-base` (где `pip install uv`) в рантайм не попадает [Факт по Dockerfile] |
+| Вложенный certifi у pip | `pip/_vendor/vendor.txt`: pip 26.2 и 26.2.1 — `certifi==2026.6.17`; pip 26.2.2 (wheel от 2026-10-20) — `certifi==2026.10.19` [Факт: `pip download pip==…`, `unzip -p … pip/_vendor/vendor.txt`] |
+| Какой pip в Python 3.13 | Локальный CPython 3.13.16: `ensurepip.version()` = 26.2.1 [Факт]. Что образ по digest `cf50a4f6…` несёт pip 26.2.x с certifi 2026.6.17 — [Гипотеза], подтверждается notice CI по базовому образу |
+| Вывод | Совпадение версии 1:1 и отсутствие других кандидатов: источник — `/usr/local/lib/python3.13/site-packages/pip/_vendor/certifi` (и копия в wheel ensurepip) [Вывод]. Обновление digest само по себе не годится: нужен образ с pip ≥ 26.2.2 (wheel вышел 2026-10-20), а наличие такого образа не проверено (реестры закрыты); на 899cf1e (тег python уже сдвинулся на `cf50a4f6…`) Trivy снова нашёл 2026.6.17 [Факт по аннотации со слов оркестратора] |
+
+Вывод команд (сокращённо):
+```
+$ pip download --no-deps pip==26.2 / 26.2.1 / 26.2.2; unzip -p <whl> pip/_vendor/vendor.txt | grep certifi
+pip-26.2-py3-none-any.whl:     certifi==2026.6.17
+pip-26.2.1-py3-none-any.whl:   certifi==2026.6.17
+pip-26.2.2-py3-none-any.whl:   certifi==2026.10.19
+$ python3 -V; python3 -c "import ensurepip; print(ensurepip.version())"
+Python 3.13.16
+26.2.1
+# проверка механики удаления на venv с pip 26.2.1 (как в образе):
+$ find v \( -name certifi -o -name 'certifi-*' \)      → .../pip/_vendor/certifi, .../pip-26.2.1.dist-info/licenses/src/pip/_vendor/certifi
+$ v/bin/python -m pip uninstall --yes pip             → Successfully uninstalled pip-26.2.1
+$ v/bin/python -c 'import pip'                        → ImportError (PIP_GONE); find → пусто
+```
+
+**Исправление (`deploy/Dockerfile`, стадия `python-runtime`, до `COPY /app/.venv`):** `python -m pip uninstall --yes pip`; удаление `/usr/local/lib/python3.*/ensurepip/_bundled` и `/usr/local/bin/pip*`; сборка падает, если `import pip` удаётся или `find / -xdev \( -name certifi -o -name 'certifi-*' \)` что-то находит (маска не `*certifi*` — совпала бы с `ca-certificates`). Рантайму `pip` не нужен: зависимости — готовый `.venv`, healthcheck и entrypoint — только `python`/`sh`. `.trivyignore`, `--ignore-unfixed`, понижения порога нет — закреплено тестом.
+
+**Диагностика источника в CI (`::notice`).**
+- `deploy/ci/check.sh`: `trivy image --format json --list-all-pkgs --severity CRITICAL` → `deploy/ci/out/trivy-critical.json` **при любом исходе** (до гейта; на гейт не влияет). Гейт — прежняя единственная строка `--severity CRITICAL --exit-code 1`.
+- `ci.yml`, шаг «Trivy — путь certifi в образе и в базовом образе (::notice)» (`if: build success`, `continue-on-error`): тот же JSON по базовому образу из `ARG PYTHON_IMAGE` Dockerfile (по digest) → `trivy-base.json`, затем `gha.py trivy --pkg certifi --json trivy-critical.json --json trivy-base.json`.
+- `gha.py trivy` → одна `::notice` «Trivy: CRITICAL и путь certifi»: по каждому отчёту — `CRITICAL N`; для каждой CRITICAL — `Target/Class/Type`, ID, версия → исправленная, `PkgPath`, `FilePath`; все установки `certifi` (версия, Target, FilePath) или «certifi: не найден»; нет/битый отчёт — строкой в той же notice. Код выхода 0. Бюджет аннотаций delivery: +1 notice (лимит 10).
+
+**Digest (аннотация прогона `899cf1e`; на `34d28d0` python и node были `98ce6fb1…` и `91acba91…` — теги сдвинулись):**
+| Образ | Где закреплён |
+|---|---|
+| `python:3.13-slim@sha256:cf50a4f6ac4f026458b08d5222023d700ac806410dff5e9ca8728fa44f2b850f` | `deploy/Dockerfile` `ARG PYTHON_IMAGE` |
+| `node:24-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205` | `deploy/Dockerfile` `ARG NODE_IMAGE`, `ci.yml` `NODE_IMAGE` |
+| `postgres:18@sha256:1267c7e692de235fda2a50dbcdbcbca4672ea6a0298576a6bd9d07cafc319b32` | `ci.yml` (service задания test), `deploy/docker-compose.test.yml` |
+| `aquasec/trivy:0.58.0@sha256:b88012e2a0a309d6a8a00463d4e63e5e513377fb74eccbc8f9b0f8f81940ebeb` | `ci.yml` `TRIVY_IMAGE` |
+
+Шаг `digests` печатает digest **тегов** — дрейф тега относительно закреплённого digest виден в аннотации.
+
+### 5Д5: npm audit — гейт только critical, moderate — WARN с перечнем advisory
+
+`check.sh`: гейт — `npm audit --omit=dev --audit-level=critical` (как было); затем `npm audit --omit=dev --json` → `deploy/ci/out/npm-audit.json` → `deploy/ci/npm_advisories.py` → `deploy/ci/out/npm-advisories.txt`, в итог — строка `WARN` (новая функция `warn()`, `FAILED` не трогает). `WARN` попадает и в `::notice` «Сводка CI» (там все строки, кроме `OK`).
+
+Advisory для `16_release.md` («Известные ограничения»; `npm audit --json --omit=dev`, 2026-10-21) [Факт]:
+| Advisory | Пакет | Уязвимый диапазон | Суть |
+|---|---|---|---|
+| GHSA-vcc3-ghjq-m6fr (npm 1147955), moderate | `decode-uri-component` | `<=0.4.2` | DoS через экспоненциальное декодирование некорректного percent-encoded ввода |
+
+Транзитивно (та же advisory): `query-string`, `ra-core`, `ra-i18n-polyglot`, `ra-language-english`, `ra-ui-materialui`, `react-admin`. `fixAvailable` — только ломающее изменение (`isSemVerMajor: true`).
+
+```
+$ make check        (локально, без CHECK_STRICT; Trivy здесь не установлен)
+OK    npm: audit — критичных уязвимостей нет
+WARN  npm: audit — 7 moderate; advisory: GHSA-vcc3-ghjq-m6fr (moderate, decode-uri-component <=0.4.2) (не critical, 5Д5)
+SKIP  trivy: не установлен (в CI — контейнер Trivy, T092)
+make check: OK          rc=0
+```
+
+### T098 (часть DevOps)
+
+- `deploy/Dockerfile`: `CMD ["python", "-m", "bm.serve", "--host", "0.0.0.0", "--port", "8080"]`; `ENV UVICORN_WORKERS=2` остаётся (читает `bm.serve`), `--no-server-header` → `server_header=False` в `bm.serve`. Entrypoint и healthcheck не меняются.
+- `deploy/local/stack.sh`: `spawn api "$VENV/bin/python" -m bm.serve --host 127.0.0.1 --port "$API_PORT"`.
+- `docs/admin-guide.md` команды uvicorn не содержит, строка `UVICORN_WORKERS` (по умолчанию 2) верна — правка не нужна.
+- Регресс-тест Backend 2 `tests/integration/test_keepalive_latency.py` в `make test` — PASS.
+
+### 5Д7, 5Д8 (1)
+
+- `gha.py summary`: шаги с `outcome == skipped` выводятся строкой «Пропущены (предусловие не выполнено): …» — не PASS (в `gates.tsv` их и не было: `gha.py run` не запускался).
+- `Makefile`: цель `load` — в зоне DevOps (комментарий, строка в шапке), поведение прежнее: `$(STACK_ENV) bash tests/load/run_load.sh`; закреплено тестом.
+
+### Тесты (TDD)
+
+- `tests/deploy/test_image_supply.py` (14): pip удалён и остатки проверяются до `COPY .venv`; нет исключений Trivy; JSON Trivy пишется до гейта; шаг CI с notice по образу и базовому образу при любом исходе; digest `899cf1e`; npm-гейт только critical, `warn()` без `FAILED`; цель `load`; `CMD`/`stack.sh` — `bm.serve`, нигде `uvicorn … --workers`.
+- `tests/deploy/test_ci_annotations.py`: `gha.py trivy` → notice (не error), несколько отчётов, `--pkg`, чистый образ, нет/битый отчёт; сводка с пропущенными шагами.
+- `tests/deploy/test_npm_advisories.py` (2): перечень advisory и транзитивных пакетов, итоговая строка; чистый и битый отчёт.
+
+```
+# красная фаза (после правки тестов, до кода):
+12 failed, 69 passed   (gha.py trivy/summary — 5, test_image_supply — 5, npm_advisories — 2)
+# зелёная:
+$ pytest tests/deploy                                                   → 81 passed
+$ DATABASE_URL=postgresql://bm:bm@127.0.0.1:5432/bm_test_devops make test   → exit 0
+  797 passed, 1 skipped (test_serve.py:64: AF_INET6 недоступен в среде) in 210.67s
+  Contracts: 3 kept, 0 broken; vitest: Test Files 28 passed (28), Tests 363 passed (363)
+$ make lint                                                             → exit 0 (172 files already formatted)
+$ uvx --with shellcheck-py --with pyflakes --from actionlint-py actionlint -verbose .github/workflows/ci.yml
+  Found total 0 errors                                                  → exit 0
+```
+
+### Отклонения
+
+1. **Образ локально не собран** (Docker-демон недоступен из среды, реестры закрыты): удаление pip проверено статически и на venv с pip 26.2.1; защита — проверки в самом `RUN` (сборка в CI упадёт на `make build`, а не пропустит образ). Ветка Trivy в `check.sh` локально не исполнялась (нет trivy и образа) — проверена `bash -n` и статическим тестом.
+2. **`postgres` в `deploy/docker-compose.yml` по digest не закреплён** (дефолт `POSTGRES_IMAGE=postgres:18`): путь закрытого контура в руководстве §13 — `docker save`/`load` по тегу. Закреплены CI и `docker-compose.test.yml`. Вопрос 1.
+3. Шаг notice по базовому образу — `continue-on-error`: если Trivy не скачает базовый образ, в notice будет «нет отчёта», гейт не страдает.
+
+### Что проверить в CI релизного SHA
+
+- `make build` — PASS (если упал: «pip остался» или «certifi вне /app/.venv: <путь>» в `::error`).
+- `CHECK_STRICT=1 make check` — exit 0; в «Сводке CI» единственная не-OK строка — `WARN  npm: audit — 7 moderate; advisory: GHSA-vcc3-ghjq-m6fr …`.
+- notice «Trivy: CRITICAL и путь certifi»: `bm:local: CRITICAL 0`, `certifi 2026.10.19 Target=Python FilePath=app/.venv/…` (одна установка); по базовому образу — `certifi 2026.6.17 … FilePath=usr/local/lib/python3.13/site-packages/pip/…` или «certifi: не найден» (тогда источник подтверждается только исчезновением находки — разберу по факту).
+- notice digest: теги совпадают с закреплёнными или видно смещение; `make test` на `postgres:18@sha256:1267…`, frontend на `node@sha256:55fb…` — PASS; smoke/failover с `python -m bm.serve` — PASS.
+
+### Вопросы техлиду
+
+1. Закреплять ли `postgres:18` по digest и в `deploy/docker-compose.yml`? Тогда в руководстве §13 путь `docker save`/`load` меняется на `docker pull postgres:18@sha256:…` + `docker tag` и требует проверки на стенде. Предлагаю для v1 оставить тег в compose, digest — в CI и `docker-compose.test.yml`.

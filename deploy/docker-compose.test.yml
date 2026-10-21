@@ -4,7 +4,7 @@ name: bm-test
 
 services:
   postgres-test:
-    image: postgres:18
+    image: postgres:18@sha256:1267c7e692de235fda2a50dbcdbcbca4672ea6a0298576a6bd9d07cafc319b32
     environment:
       POSTGRES_DB: bm_test
       POSTGRES_USER: postgres

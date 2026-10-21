@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Стек из локальных процессов (14_tech_rulings.md, пакет 3, 3Д1(в); T087) — замена docker compose там, где
-# образы собрать нельзя. Те же процессы, что в контейнерах: свой кластер PostgreSQL, api (uvicorn, 2 воркера),
+# образы собрать нельзя. Те же процессы, что в контейнерах: свой кластер PostgreSQL, api (python -m bm.serve, 2 воркера),
 # worker. Используется make up-local / down-local, make smoke|backup|restore|failover|load с BM_STACK=local.
 #
 #   stack.sh up                  поднять всё (initdb при первом запуске) и дождаться /readyz
@@ -175,8 +175,8 @@ app_start() {
       port_busy "$API_PORT" && die "порт $API_PORT занят: задайте BM_LOCAL_API_PORT"
       # Как entrypoint образа: каталог метрик нескольких процессов очищается при старте api.
       rm -rf "$PROMETHEUS_MULTIPROC_DIR"; mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
-      spawn api "$VENV/bin/python" -m uvicorn bm.main:create_app --factory --host 127.0.0.1 \
-        --port "$API_PORT" --workers "$UVICORN_WORKERS" --no-server-header ;;
+      # Та же точка запуска, что CMD образа (T098, 5Д1): воркеры — из UVICORN_WORKERS, TCP_NODELAY — в bm.serve.
+      spawn api "$VENV/bin/python" -m bm.serve --host 127.0.0.1 --port "$API_PORT" ;;
     worker)
       # Каталог метрик только у api (пакет 2, В1-6).
       spawn worker env -u PROMETHEUS_MULTIPROC_DIR "$VENV/bin/python" -m bm.worker ;;

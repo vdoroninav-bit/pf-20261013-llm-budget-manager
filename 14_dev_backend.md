@@ -673,3 +673,73 @@ Contracts: 3 kept, 0 broken.
 
 ### Вопросы техлиду
 1. Принять исправление `SESSION_SECRET_FILE` в рамках T097 или оформить его отдельной строкой в `16_release.md` как найденный дефект поставки?
+
+## 2026-10-21 — Backend 2: T098, часть Backend 2 (Д-1: TCP_NODELAY у `api` при нескольких воркерах; 14_tech_rulings.md, пакет 5, 5Д1–5Д2)
+
+Статус: часть Backend 2 выполнена, в `12_tasks.md` отмечена подпунктом `[x]`. Общий `[x]` у T098 ставится после части DevOps и приёмки QA (повтор T086, 5Д2).
+
+### Итог в числах (loadavg 0,1–0,4, БД `bm_test_b2`, 2 воркера)
+| Замер | Прежняя команда `uvicorn … --workers 2` | `python -m bm.serve` |
+|---|---|---|
+| Регресс-тест: keep-alive `GET /healthz`, медиана запросов 2–31 | 43,95 мс (мин 42,09, макс 47,97) — FAIL | 0,45 мс (мин 0,35, макс 2,78) — PASS |
+| 200 решений эталонным `budget_client`, `timeout_ms=50` (по умолчанию) | `fail_open` 15 из 200 (7,5%); медиана 48,00 мс, p95 51,08, p99 51,41 | `fail_open` 0 из 200; медиана 4,33 мс, p95 6,65, p99 9,39, макс 11,95 |
+
+[Факт] Замеры выше сделаны на этой машине, это не эталонный стенд. SC-001 по 5Д2 подтверждает QA полным 10-минутным `make load`.
+
+### Что сделано
+- `app/backend/bm/serve.py` (новый) — точка запуска `python -m bm.serve`:
+  - `NoDelayH11Protocol(H11Protocol)` объявлен на уровне модуля. В `connection_made` он ставит `TCP_NODELAY=1` на сокет транспорта, если это AF_INET или AF_INET6, и затем вызывает базовый метод. Unix-сокет и транспорт без сокета пропускаются. `OSError` от `setsockopt` не роняет соединение;
+  - `main()` вызывает `uvicorn.run("bm.main:create_app", factory=True, host, port, workers, http=NoDelayH11Protocol, server_header=False)`. `--host` и `--port` передаются аргументами командной строки, по умолчанию `0.0.0.0` и `8080`, как в прежнем `CMD`. Число воркеров берётся из `UVICORN_WORKERS`: если переменная пуста или не задана — 2; если значение не целое или меньше 1 — выход с понятной ошибкой;
+  - в блоке `__main__` функция `main` берётся из импортированного `bm.serve`. Так в uvicorn уходит класс `bm.serve.NoDelayH11Protocol`, а не `__main__.…`: воркеры запускаются через spawn и ищут класс по имени модуля.
+- `Config.bind_socket`, `Multiprocess` и asyncio не подменяются. Новых зависимостей и переменных окружения нет. Тайм-аут `budget_client` не менялся.
+- `tests/unit/test_serve.py` проверяет:
+  - на TCP-сокете с `proto=0` флаг ставится;
+  - на AF_UNIX и без сокета ничего не падает;
+  - класс живёт в `bm.serve`;
+  - `main()` по умолчанию совпадает с прежним `CMD`;
+  - хост и порт берутся из аргументов, число воркеров — из env;
+  - плохие значения `UVICORN_WORKERS` отклоняются.
+
+  Случай AF_INET6 в этой среде пропущен (`skip`: IPv6 недоступен).
+- `tests/integration/test_keepalive_latency.py` (только Linux) запускает `python -m bm.serve --host 127.0.0.1 --port <свободный>` с `UVICORN_WORKERS=2` и БД из `DATABASE_URL`. Клиент — одно `http.client.HTTPConnection` без TCP_NODELAY: 1 прогревочный и 30 подряд `GET /healthz`. Проверка: медиана < 10 мс. Порт своего `api` на время теста добавляется в `conftest.ALLOWED_ENDPOINTS`, как в `test_webhook.py`.
+
+### Согласование «той же команды» с DevOps (T099)
+Общая команда — `python -m bm.serve --host <адрес> --port <порт>`, число воркеров берётся из `UVICORN_WORKERS`.
+- `CMD` образа: `["python", "-m", "bm.serve", "--host", "0.0.0.0", "--port", "8080"]`.
+- `stack.sh`: `"$VENV/bin/python" -m bm.serve --host 127.0.0.1 --port "$API_PORT"`.
+- Регресс-тест: константа `SERVE_CMD` с той же формой.
+
+Отдельный скрипт не понадобился: вся логика запуска (флаги uvicorn, `server_header=False`, воркеры) живёт в `bm.serve.main()`, снаружи остаются только хост и порт. То, что `CMD` и `stack.sh` не вызывают `uvicorn` напрямую, проверяет статический тест DevOps `tests/deploy/test_image_supply.py`. Файлы DevOps я не трогал.
+
+### Красная и зелёная фазы (повтор 21:33, loadavg 0,31)
+- Красная фаза. Временная копия теста, в `SERVE_CMD` стоит прежняя команда `python -m uvicorn bm.main:create_app --factory --host 127.0.0.1 --port <p> --workers 2 --no-server-header`. После прогона копия удалена:
+  ```
+  keep-alive GET /healthz, воркеров 2: медиана 43.95 мс, мин 42.09, макс 47.97 (n=30)
+  E       AssertionError: медиана 43.95 мс ≥ 10.0 мс: похоже на Д-1 (нет TCP_NODELAY на сокетах api)
+  1 failed in 2.75s
+  ```
+  До появления модуля `test_serve.py` падал на `ImportError: cannot import name 'serve' from 'bm'`.
+- Зелёная фаза:
+  ```
+  keep-alive GET /healthz, воркеров 2: медиана 0.45 мс, мин 0.35, макс 2.78 (n=30)
+  11 passed, 1 skipped in 1.32s
+  ```
+
+### 200 решений эталонным `budget_client` (5Д1, проверка в T098)
+Использован скрипт вне репозитория (scratchpad). Схема БД `bm_test_b2` перед каждым прогоном пересоздаётся. Скрипт поднимает `api` прежней или новой командой с 2 воркерами на свободном порту 127.0.0.1. Подготовка данных — `tests.failover.stack.provision(("open",))`: подразделение `enforce` с `fail_mode=open` и сервисный ключ. Затем `BudgetClient(base_url, key, state_dir)` без `timeout_ms` (проверено `timeout_ms == 50`), 1 прогревочное решение и 200 решений `decide({"type": "service"}, …)` подряд.
+```
+uvicorn: решений 200, fail_open 15, исходы {'allow': 200}, timeout_ms 50; медиана 48.00 мс, p95 51.08, p99 51.41, макс 51.63; loadavg 0.11
+serve:   решений 200, fail_open 0,  исходы {'allow': 200}, timeout_ms 50; медиана 4.33 мс,  p95 6.65,  p99 9.39,  макс 11.95; loadavg 0.34
+```
+С исправлением — 0 `fail_open` по тайм-ауту, критерий 5Д1 выполнен. Здесь у клиента медиана 4,33 мс против 0,45 мс у `/healthz`: в неё входит само решение (БД, резерв). [Вывод] Запас до тайм-аута 50 мс — больше 4× по p99.
+
+### Полный прогон и lint
+- `DATABASE_URL=…/bm_test_b2 SKIP_FRONTEND=1 make test`: `797 passed, 1 skipped in 256.26s`, `Contracts: 3 kept, 0 broken`, rc=0. Пропущен только AF_INET6.
+- `make lint`: `All checks passed!`, `172 files already formatted`, `Contracts: 3 kept, 0 broken`.
+- Предыдущий прогон (21:33–21:37) дал `5 failed, 785 passed`. Упали `tests/deploy/test_ci_annotations.py` (3) и `tests/deploy/test_image_supply.py` (2, digest), `make lint` нашёл 3 ошибки в `deploy/ci/gha.py`. Это правки T099, которые DevOps вносил в тот момент, к T098 они не относятся. После того как файлы DevOps перестали меняться, `tests/deploy` дал `81 passed`, а полный прогон и lint — зелёные (см. выше).
+
+### Отклонения
+- Хост и порт передаются аргументами `--host`/`--port`, а не через `BIND_ADDR`/`API_PORT`. В compose эти переменные означают адрес публикации на хосте, а контейнер всегда слушает `0.0.0.0:8080`. Новых переменных нет, как требует 5Д1.
+
+### Вопросы техлиду
+Нет.

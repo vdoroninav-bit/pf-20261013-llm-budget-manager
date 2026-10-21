@@ -12,6 +12,12 @@ API статусов шагов и аннотаций check-run. Поэтому 
   gha.py notice --title <заголовок>     текст из stdin → `::notice`
   gha.py summary [--out deploy/ci/out]  сводка: шаги (STEPS_JSON = toJSON(steps)), гейты, sha256 SBOM,
                                         строки FAIL из summary.txt make check → одна `::notice`
+  gha.py trivy [--pkg certifi ...] --json <trivy.json> [--json ...]
+      Источник находок Trivy (T099, 5Д3) → одна `::notice` по всем отчётам (`trivy image --format json
+      --list-all-pkgs`): для каждого отчёта — число CRITICAL; для каждой CRITICAL — Target, Class, Type,
+      PkgPath, FilePath (из Packages по имени и версии); все установки пакетов --pkg и уязвимых пакетов
+      (версия, Target, FilePath) или «не найден». Нет или битый отчёт — строка в той же notice.
+      Код выхода всегда 0: гейт — шаг make check.
 
 Ограничения: ≤ 4 КБ текста на аннотацию (UTF-8, обрезается по символам), ≤ 10 аннотаций на задачу (счётчик
 в GHA_STATE_DIR), из них 2 оставлены под notice. Секреты: значения переменных SECRET_KEYS из GHA_SECRETS_FILE
@@ -229,6 +235,10 @@ def cmd_summary(args: argparse.Namespace) -> int:
     steps = json.loads(os.environ.get("STEPS_JSON") or "{}")
     if steps:
         lines.append("Шаги: " + ", ".join(f"{k}: {v.get('outcome', '?')}" for k, v in steps.items()))
+        # 5Д7: шаг, чьё предусловие не выполнено, — «пропущен», а не PASS
+        skipped = [k for k, v in steps.items() if v.get("outcome") == "skipped"]
+        if skipped:
+            lines.append("Пропущены (предусловие не выполнено): " + ", ".join(skipped))
     out = Path(args.out)
     for sbom in sorted(out.glob("sbom-*.cdx.json")):
         lines.append(f"{sbom.name} sha256={hashlib.sha256(sbom.read_bytes()).hexdigest()}")
@@ -237,6 +247,63 @@ def cmd_summary(args: argparse.Namespace) -> int:
         text = summary.read_text(encoding="utf-8", errors="replace").splitlines()
         lines.append("make check: " + ("; ".join(t for t in text if not t.startswith("OK")) or "все OK"))
     ann.emit("notice", f"Сводка CI {os.environ.get('GITHUB_JOB', '')}".strip(), "\n".join(lines) or "(пусто)")
+    return 0
+
+
+def _trivy_lines(report: dict, pkgs: list[str]) -> list[str]:
+    results = [r for r in report.get("Results") or [] if isinstance(r, dict)]
+    lines: list[str] = []
+    names = list(dict.fromkeys(pkgs))
+    total = 0
+    for result in results:
+        found = result.get("Vulnerabilities") or []
+        vulns = [v for v in found if v.get("Severity", "CRITICAL") == "CRITICAL"]
+        if not vulns:
+            continue
+        total += len(vulns)
+        packages = result.get("Packages") or []
+        target, cls, kind = result.get("Target", "?"), result.get("Class", "?"), result.get("Type", "?")
+        lines.append(f"  Target={target} Class={cls} Type={kind}")
+        for v in vulns:
+            name, version = v.get("PkgName", "?"), v.get("InstalledVersion", "?")
+            same = [p for p in packages if p.get("Name") == name and p.get("Version") == version]
+            files = [p.get("FilePath") or "-" for p in same] or ["-"]
+            lines.append(
+                f"    {v.get('VulnerabilityID', '?')} {name} {version} -> {v.get('FixedVersion') or '-'}"
+                f" PkgPath={v.get('PkgPath') or '-'} FilePath={', '.join(files)}"
+            )
+            if name not in names:
+                names.append(name)
+    head = [f"{report.get('ArtifactName', '?')}: CRITICAL {total}"]
+    for name in names:
+        installs = [
+            f"  {name} {p.get('Version', '?')} Target={r.get('Target', '?')}"
+            f" FilePath={p.get('FilePath') or '-'}"
+            for r in results
+            for p in r.get("Packages") or []
+            if p.get("Name") == name
+        ]
+        lines += installs or [f"  {name}: не найден"]
+    return head + lines
+
+
+def cmd_trivy(args: argparse.Namespace) -> int:
+    lines: list[str] = []
+    for raw in args.json:
+        path = Path(raw)
+        if not path.is_file():
+            lines.append(f"{path}: нет отчёта (Trivy не запускался или упал)")
+            continue
+        try:
+            report = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            lines.append(f"{path}: отчёт не читается: {type(e).__name__}: {e}")
+            continue
+        lines += _trivy_lines(report if isinstance(report, dict) else {}, args.pkg)
+    text = "\n".join(lines) or "(нет отчётов)"
+    print(text)
+    title = "Trivy: CRITICAL" + (f" и путь {', '.join(args.pkg)}" if args.pkg else "")
+    Annotator().emit("notice", title, text)
     return 0
 
 
@@ -251,8 +318,12 @@ def main(argv: list[str] | None = None) -> int:
     notice.add_argument("--title", required=True)
     summary = sub.add_parser("summary")
     summary.add_argument("--out", default="deploy/ci/out")
+    trivy = sub.add_parser("trivy")
+    trivy.add_argument("--json", action="append", required=True)
+    trivy.add_argument("--pkg", action="append", default=[])
     args = parser.parse_args(argv)
-    return {"run": cmd_run, "notice": cmd_notice, "summary": cmd_summary}[args.cmd](args)
+    commands = {"run": cmd_run, "notice": cmd_notice, "summary": cmd_summary, "trivy": cmd_trivy}
+    return commands[args.cmd](args)
 
 
 if __name__ == "__main__":

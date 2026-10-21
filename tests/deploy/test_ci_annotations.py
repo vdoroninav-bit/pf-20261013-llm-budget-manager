@@ -180,3 +180,139 @@ def test_summary_lists_steps_gates_and_sbom_hashes(tmp_path: Path) -> None:
 @pytest.mark.parametrize("bad", [["run"], ["run", "--title", "t"], ["nope"]])
 def test_usage_errors(tmp_path: Path, bad: list[str]) -> None:
     assert _gha(tmp_path, *bad).returncode == 2
+
+
+# ---------------------------------------------------------------- источник находки Trivy (T099, 5Д3)
+
+TRIVY_JSON = {
+    "SchemaVersion": 2,
+    "ArtifactName": "bm:local",
+    "Results": [
+        {"Target": "bm:local (debian 13.7)", "Class": "os-pkgs", "Type": "debian", "Packages": []},
+        {
+            "Target": "Python",
+            "Class": "lang-pkgs",
+            "Type": "python-pkg",
+            "Packages": [
+                {
+                    "Name": "certifi",
+                    "Version": "2026.6.17",
+                    "FilePath": "usr/local/lib/python3.13/site-packages/pip/_vendor/certifi/x",
+                },
+                {
+                    "Name": "certifi",
+                    "Version": "2026.10.19",
+                    "FilePath": "app/.venv/lib/python3.13/site-packages/certifi-2026.10.19.dist-info/METADATA",
+                },
+                {"Name": "h11", "Version": "0.16.0", "FilePath": "app/.venv/lib/h11/METADATA"},
+            ],
+            "Vulnerabilities": [
+                {
+                    "VulnerabilityID": "GHSA-6q48-6c7w-9gw2",
+                    "PkgName": "certifi",
+                    "InstalledVersion": "2026.6.17",
+                    "FixedVersion": "2026.10.19",
+                    "Severity": "CRITICAL",
+                }
+            ],
+        },
+    ],
+}
+
+
+BASE_JSON = {
+    "SchemaVersion": 2,
+    "ArtifactName": "python:3.13-slim@sha256:cf50",
+    "Results": [
+        {
+            "Target": "Python",
+            "Class": "lang-pkgs",
+            "Type": "python-pkg",
+            "Packages": [
+                {
+                    "Name": "pip",
+                    "Version": "26.2.1",
+                    "FilePath": "usr/local/lib/python3.13/site-packages/pip-26.2.1",
+                },
+            ],
+        }
+    ],
+}
+
+
+def _notice(tmp_path: Path, *reports: dict, pkg: str | None = "certifi") -> tuple[str, str]:
+    args = ["trivy"] + (["--pkg", pkg] if pkg else [])
+    for i, data in enumerate(reports):
+        path = tmp_path / f"r{i}.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        args += ["--json", str(path)]
+    proc = _gha(tmp_path, *args)
+    assert proc.returncode == 0, proc.stderr
+    assert not _commands(proc.stdout, "error"), "диагностика — notice, не error"
+    notices = _commands(proc.stdout, "notice")
+    assert len(notices) == 1, proc.stdout
+    title, data = notices[0][2:].split("::", 1)
+    return title, _unescape(data)
+
+
+def test_trivy_notice_with_target_pkgpath_filepath_and_all_installs(tmp_path: Path) -> None:
+    title, text = _notice(tmp_path, TRIVY_JSON, BASE_JSON)
+    assert title == "notice title=Trivy: CRITICAL и путь certifi".replace(":", "%3A")
+    assert "bm:local: CRITICAL 1" in text
+    assert "Target=Python Class=lang-pkgs Type=python-pkg" in text
+    assert "GHSA-6q48-6c7w-9gw2 certifi 2026.6.17 -> 2026.10.19" in text
+    # PkgPath нет в находке — FilePath берётся из Packages по имени и версии
+    assert "PkgPath=- FilePath=usr/local/lib/python3.13/site-packages/pip/_vendor/certifi/x" in text
+    # все установки certifi в образе — чтобы отличить копию pip от /app/.venv
+    assert (
+        "certifi 2026.10.19 Target=Python FilePath=app/.venv/lib/python3.13/site-packages/certifi-2026.10.19"
+        in text
+    )
+    assert "h11" not in text
+    # второй отчёт — базовый образ: находок нет, certifi не найден (pip вендорит без метаданных)
+    assert "python:3.13-slim@sha256:cf50: CRITICAL 0" in text
+    assert "certifi: не найден" in text
+
+
+def test_trivy_notice_prefers_pkgpath_and_reports_clean_image(tmp_path: Path) -> None:
+    data = json.loads(json.dumps(TRIVY_JSON))
+    data["Results"][1]["Vulnerabilities"][0]["PkgPath"] = "usr/local/lib/python3.13/site-packages/pip"
+    _, text = _notice(tmp_path, data)
+    assert "PkgPath=usr/local/lib/python3.13/site-packages/pip FilePath=" in text
+
+    # исправленный образ: CRITICAL 0, но путь certifi всё равно в notice — подтверждение источника
+    del data["Results"][1]["Vulnerabilities"]
+    del data["Results"][1]["Packages"][0]
+    (tmp_path / "clean").mkdir()
+    _, text = _notice(tmp_path / "clean", data)
+    assert "bm:local: CRITICAL 0" in text
+    assert "certifi 2026.10.19 Target=Python FilePath=app/.venv/" in text
+    assert "2026.6.17" not in text
+
+
+def test_trivy_vulnerable_package_listed_without_pkg_option(tmp_path: Path) -> None:
+    _, text = _notice(tmp_path, TRIVY_JSON, pkg=None)
+    assert (
+        "certifi 2026.6.17 Target=Python FilePath=usr/local/lib/python3.13/site-packages/pip/_vendor" in text
+    )
+
+
+def test_trivy_missing_or_broken_report_is_reported_not_fatal(tmp_path: Path) -> None:
+    (tmp_path / "bad.json").write_text("{", encoding="utf-8")
+    proc = _gha(
+        tmp_path, "trivy", "--json", str(tmp_path / "nope.json"), "--json", str(tmp_path / "bad.json")
+    )
+    assert proc.returncode == 0
+    notices = _commands(proc.stdout, "notice")
+    assert len(notices) == 1 and not _commands(proc.stdout, "error")
+    text = _unescape(notices[0])
+    assert "nope.json: нет отчёта" in text and "bad.json: отчёт не читается" in text
+
+
+def test_summary_marks_skipped_steps_not_pass(tmp_path: Path) -> None:
+    """5Д7: шаг с невыполненным предусловием — «пропущен», а не PASS."""
+    steps = {"backup": {"outcome": "failure"}, "restore": {"outcome": "skipped"}}
+    proc = _gha(tmp_path, "summary", "--out", str(tmp_path), env={"STEPS_JSON": json.dumps(steps)})
+    text = _unescape(_commands(proc.stdout, "notice")[0].split("::", 2)[2])
+    assert "Пропущены (предусловие не выполнено): restore" in text
+    assert "restore: PASS" not in text

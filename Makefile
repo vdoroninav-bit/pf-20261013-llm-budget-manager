@@ -6,6 +6,7 @@
 # Стек из локальных процессов (без образов): make up-local; затем make smoke|backup|restore|failover BM_STACK=local
 #                                           (BM_STACK=local указывается явно); make down-local
 # Статическая проверка поставки:            make compose-check
+# Нагрузка SC-001/SC-004 (T086):            make up && make load | make up-local && make load BM_STACK=local
 
 SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -136,6 +137,8 @@ up-local: sync ## Поднять стек из локальных процесс
 down-local: ## Остановить стек из локальных процессов (данные кластера сохраняются; удалить: deploy/local/stack.sh destroy)
 	$(LOCAL_STACK) down
 
+# Цель от QA (T086), с пакета 5 (5Д8 (1)) — в зоне DevOps; поведение прежнее: генератор — tests/load/run_load.sh.
+# Замер SC-001 — без параллельных make test и нагрузок (5Д2).
 load: sync ## Нагрузка SC-001/SC-004 против поднятого стека (BM_STACK=compose|local; LOAD_RATE, LOAD_DURATION_S, VEGETA) (T086)
 	$(STACK_ENV) bash tests/load/run_load.sh
 

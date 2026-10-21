@@ -33,6 +33,8 @@ FAILED=0
 
 ok()   { RESULTS+=("OK    $1"); }
 fail() { RESULTS+=("FAIL  $1"); FAILED=1; }
+# Предупреждение: в итоге и в сводке CI видно, но make check не роняет (принятые ограничения, 5Д5).
+warn() { RESULTS+=("WARN  $1"); }
 skip() {
   if [[ "$CHECK_STRICT" == "1" ]]; then RESULTS+=("FAIL  $1 (пропуск запрещён: CHECK_STRICT=1)"); FAILED=1
   else RESULTS+=("SKIP  $1"); fi
@@ -139,10 +141,19 @@ PY
     else
       fail "npm: SBOM"
     fi
+    # Гейт — только critical (конституция). Некритичные находки — WARN с перечнем advisory (5Д5: 7 moderate
+    # через react-admin → decode-uri-component приняты как известное ограничение v1).
     if npm --prefix "$FRONTEND_DIR" audit --omit=dev --audit-level=critical; then
       ok "npm: audit — критичных уязвимостей нет"
     else
       fail "npm: audit (critical)"
+    fi
+    npm --prefix "$FRONTEND_DIR" audit --omit=dev --json >"$OUT/npm-audit.json" 2>/dev/null || true
+    if python3 "$CI/npm_advisories.py" "$OUT/npm-audit.json" | tee "$OUT/npm-advisories.txt"; then
+      npm_line="$(tail -n 1 "$OUT/npm-advisories.txt")"
+      [[ "$npm_line" == "уязвимостей нет" ]] || warn "npm: audit — $npm_line (не critical, 5Д5)"
+    else
+      warn "npm: audit --json не разобран (см. $OUT/npm-advisories.txt); гейт critical — строкой выше"
     fi
   fi
 else
@@ -161,6 +172,11 @@ else
   else
     fail "trivy: SBOM образа"
   fi
+  # Источник находок и путь каждого пакета (T099, 5Д3): Target, PkgPath, FilePath — в JSON при любом исходе гейта;
+  # в CI его разбирает `gha.py trivy` (::notice). Только диагностика: на гейт не влияет, порог тот же.
+  rm -f "$OUT/trivy-critical.json"
+  "${TRIVY_CMD[@]}" image --quiet --format json --list-all-pkgs --output "$ROOT/$OUT/trivy-critical.json" \
+    --severity CRITICAL "$IMAGE" || echo "trivy: JSON-отчёт не получен (диагностика, на гейт не влияет)"
   "${TRIVY_CMD[@]}" image --quiet --severity CRITICAL --exit-code 1 "$IMAGE" | tee "$OUT/trivy-critical.txt"
   if [[ "${PIPESTATUS[0]}" -eq 0 ]]; then
     ok "trivy: 0 critical"
