@@ -340,6 +340,64 @@ describe('5.2 Ввод подписки с предпросмотром доли
     expect(api.violations).toEqual([]);
   });
 
+  it('3Ф2: сотрудники подразделения загружаются всеми страницами (450 → 3 запроса по 200, 450 в списке)', async () => {
+    const all = Array.from({ length: 450 }, (_, i) =>
+      employee({ pseudonym: `emp-${(i + 1).toString(16).padStart(10, '0')}` }),
+    );
+    const { api } = renderApp('#/subscriptions/create', {
+      role: 'admin',
+      handlers: createHandlers({
+        listEmployees: ({ query }) => {
+          const page = Number(query.page);
+          const size = Number(query.page_size);
+          return list(all.slice((page - 1) * size, page * size), all.length);
+        },
+        previewSubscription: ok(subscriptionPreview()),
+      }),
+    });
+    await fillDepartmentSubscription();
+    fireEvent.click(screen.getByLabelText('Сотрудник'));
+    fireEvent.change(screen.getByRole('combobox', { name: /^Подразделение сотрудника/ }), { target: { value: DEP_ID } });
+    const select = await screen.findByRole('combobox', { name: /^Сотрудник \(псевдоним\)/ });
+    await within(select).findByRole('option', { name: 'emp-00000001c2' }, { timeout: 2000 });
+    // 450 сотрудников + пункт «Выберите…».
+    expect(within(select).getAllByRole('option')).toHaveLength(451);
+    expect(api.callsOf('listEmployees').map((c) => c.query)).toEqual([
+      { department_id: DEP_ID, page: '1', page_size: '200' },
+      { department_id: DEP_ID, page: '2', page_size: '200' },
+      { department_id: DEP_ID, page: '3', page_size: '200' },
+    ]);
+    // Сотрудник № 201 и последний доступны для назначения.
+    fireEvent.change(select, { target: { value: 'emp-00000000c9' } });
+    await waitFor(
+      () =>
+        expect(api.callsOf('previewSubscription').at(-1)?.body.assignee).toEqual({
+          type: 'employee',
+          ref: 'emp-00000000c9',
+        }),
+      { timeout: 2000 },
+    );
+    expect(api.violations).toEqual([]);
+  });
+
+  it('3Ф2: пустая страница раньше total — загрузка останавливается, без бесконечного цикла', async () => {
+    const { api } = renderApp('#/subscriptions/create', {
+      role: 'admin',
+      handlers: createHandlers({
+        // total завышен (сотрудников удалили между запросами): вторая страница пустая.
+        listEmployees: ({ query }) => list(query.page === '1' ? [employee()] : [], 500),
+        previewSubscription: ok(subscriptionPreview()),
+      }),
+    });
+    await fillDepartmentSubscription();
+    fireEvent.click(screen.getByLabelText('Сотрудник'));
+    fireEvent.change(screen.getByRole('combobox', { name: /^Подразделение сотрудника/ }), { target: { value: DEP_ID } });
+    const select = await screen.findByRole('combobox', { name: /^Сотрудник \(псевдоним\)/ });
+    await within(select).findByRole('option', { name: 'emp-7f3a9c01b2' });
+    await waitFor(() => expect(api.callsOf('listEmployees')).toHaveLength(2));
+    expect(api.violations).toEqual([]);
+  });
+
   it('ошибка предпросмотра не блокирует сохранение', async () => {
     const { api } = renderApp('#/subscriptions/create', {
       role: 'admin',

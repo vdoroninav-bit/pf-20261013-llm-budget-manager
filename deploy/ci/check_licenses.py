@@ -62,6 +62,15 @@ def load_list(path: Path) -> set[str]:
     return items
 
 
+def load_exceptions(path: Path) -> set[str]:
+    """Исключения — узкие (пакет и версия, 14_tech_rulings.md, пакет 3, 3Д3): `<тип purl>:<имя>@<версия>`."""
+    items = load_list(path)
+    bad = sorted(i for i in items if ":" not in i or "@" not in i.split(":", 1)[1].lstrip("@"))
+    if bad:
+        raise ValueError(f"исключения без версии (нужно <тип>:<имя>@<версия>): {', '.join(bad)}")
+    return items
+
+
 def normalize(name: str) -> str:
     return NAME_TO_SPDX.get(name.strip().lower(), name.strip())
 
@@ -125,8 +134,8 @@ def check(sbom_path: Path, allow: set[str], exceptions: set[str]) -> tuple[list[
         if eco == "npm" and ENTERPRISE_NPM.match(name):
             violations.append((eco, name, ver, "ENTERPRISE", "; ".join(lics) or "-"))
             continue
-        if f"{eco}:{name}" in exceptions:
-            continue
+        if f"{eco}:{name}@{ver}" in exceptions and not any(COPYLEFT.search(lic) for lic in lics):
+            continue  # на копилефт исключения не действуют
         if not lics:
             violations.append((eco, name, ver, "UNKNOWN", "-"))
             continue
@@ -145,7 +154,12 @@ def main() -> int:
     args = ap.parse_args()
 
     allow = load_list(args.allow)
-    exceptions = load_list(args.exceptions) if args.exceptions and args.exceptions.exists() else set()
+    try:
+        has_file = args.exceptions is not None and args.exceptions.exists()
+        exceptions = load_exceptions(args.exceptions) if has_file else set()
+    except ValueError as e:
+        print(f"ОШИБКА: {args.exceptions}: {e}", file=sys.stderr)
+        return 2
     total_bad = 0
     for sbom in args.sboms:
         if not sbom.exists():

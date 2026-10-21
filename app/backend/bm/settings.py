@@ -7,7 +7,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import AnyUrl, Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Поля-секреты, для которых поддерживается вариант `<ИМЯ>_FILE`.
@@ -15,7 +15,10 @@ _FILE_SECRETS = ("session_secret", "admin_initial_password", "anthropic_admin_ke
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=None, extra="ignore", case_sensitive=False)
+    # hide_input_in_errors: ошибка старта не печатает значения (ключи, пароль в URL прокси), только текст.
+    model_config = SettingsConfigDict(
+        env_file=None, extra="ignore", case_sensitive=False, hide_input_in_errors=True
+    )
 
     # База данных
     database_url: str = Field(min_length=1)
@@ -48,6 +51,9 @@ class Settings(BaseSettings):
     import_hour_msk: int = Field(default=4, ge=0, le=23)
     import_retry_until_hour_msk: int = Field(default=12, ge=0, le=23)
     import_window_days: int = Field(default=7, ge=1)
+    # Прокси только для импорта (14_tech_rulings.md, пакет 2, Б4): пусто — прямой выход. Стандартные
+    # HTTP(S)_PROXY не действуют (egress: trust_env=False). Логин и пароль в URL — секрет.
+    import_https_proxy: SecretStr | None = None
 
     # Уведомления
     webhook_url: str | None = None
@@ -74,6 +80,23 @@ class Settings(BaseSettings):
     def _secret_not_blank(cls, v: SecretStr) -> SecretStr:
         if not v.get_secret_value().strip():
             raise ValueError("SESSION_SECRET не задан")
+        return v
+
+    @field_validator("import_https_proxy")
+    @classmethod
+    def _proxy_url(cls, v: SecretStr | None) -> SecretStr | None:
+        if v is None:
+            return v
+        try:
+            url = AnyUrl(v.get_secret_value().strip())  # urllib в bm.settings запрещён import-linter'ом
+            ok = url.scheme in ("http", "https") and bool(url.host)
+        except ValidationError:
+            ok = False
+        if not ok:
+            raise ValueError(
+                "IMPORT_HTTPS_PROXY: нужен адрес прокси вида http://хост:порт или https://хост:порт "
+                "(логин и пароль — http://логин:пароль@хост:порт); пусто — прямой выход"
+            )
         return v
 
     @model_validator(mode="after")

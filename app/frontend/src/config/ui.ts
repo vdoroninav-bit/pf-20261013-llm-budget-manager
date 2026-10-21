@@ -11,3 +11,5 @@ export const IMPORT_RUNS_POLL_MS = 10_000;
 export const SUBSCRIPTION_PREVIEW_DEBOUNCE_MS = 400;
 /** Максимальный размер файла AD (13_design_rulings.md, В6; 12_openapi.yaml importOrg). */
 export const ORG_FILE_MAX_BYTES = 10 * 1024 * 1024;
+/** Период журнала аудита по умолчанию — последние N суток по МСК, включая сегодня (14_tech_rulings.md, 3Ф5). */
+export const AUDIT_DEFAULT_DAYS = 7;

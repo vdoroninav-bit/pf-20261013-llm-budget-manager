@@ -57,10 +57,6 @@ from tests.fixtures.seed import Seed
 pytestmark = [pytest.mark.db]
 
 OCT12, OCT13 = date(2026, 10, 12), date(2026, 10, 13)
-T062 = pytest.mark.xfail(
-    strict=True, raises=(AssertionError, ImportError), reason="T062: коннектор Anthropic"
-)
-T063 = pytest.mark.xfail(strict=True, raises=(AssertionError, ImportError), reason="T063: коннектор OpenAI")
 
 
 @pytest.fixture
@@ -502,7 +498,6 @@ async def test_provider_source_rules(client: httpx.AsyncClient, seed: Seed, db: 
 # ---------------------------------------------------------------- коннекторы на подменном транспорте
 
 
-@T062
 async def test_anthropic_connector_reads_cost_report_pages(settings: Any, egress_guard: list[Any]) -> None:
     from bm.provider_import.sources.anthropic import AnthropicSource
 
@@ -536,7 +531,6 @@ async def test_anthropic_connector_reads_cost_report_pages(settings: Any, egress
     assert egress_guard == []
 
 
-@T062
 @pytest.mark.parametrize(("status", "error_class"), [(401, "auth_rejected"), (503, "provider_unavailable")])
 async def test_anthropic_connector_errors_are_classified(
     app: Any, settings: Any, seed: Seed, db: asyncpg.Connection, status: int, error_class: str
@@ -549,7 +543,6 @@ async def test_anthropic_connector_errors_are_classified(
     assert (run["status"], run["error_class"]) == ("failed", error_class)
 
 
-@T062
 async def test_anthropic_connector_bad_response(app: Any, settings: Any, db: asyncpg.Connection) -> None:
     from bm.provider_import.sources.anthropic import AnthropicSource
 
@@ -558,7 +551,6 @@ async def test_anthropic_connector_bad_response(app: Any, settings: Any, db: asy
     assert (await last_run(db))["error_class"] == "bad_response"
 
 
-@T062
 @pytest.mark.parametrize("settings", [{"import_enabled": False}], indirect=True)
 async def test_anthropic_connector_disabled_flag_no_connection(
     settings: Any, egress_guard: list[Any]
@@ -572,7 +564,6 @@ async def test_anthropic_connector_disabled_flag_no_connection(
     assert fake.requests == [] and egress_guard == []
 
 
-@T063
 async def test_openai_connector_reads_costs_pages(settings: Any, egress_guard: list[Any]) -> None:
     from bm.provider_import.sources.openai import OpenAISource
 

@@ -72,3 +72,46 @@ def test_session_cookie_secure_default_false_and_from_env(monkeypatch: pytest.Mo
     assert Settings(_env_file=None).session_cookie_secure is False  # type: ignore[call-arg]
     monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
     assert Settings(_env_file=None).session_cookie_secure is True  # type: ignore[call-arg]
+
+
+# ---------------------------------------------------------------- T062: IMPORT_HTTPS_PROXY (пакет 2, Б4)
+
+PROXY_PASSWORD = "Pr0xy-Secret-77"
+
+
+def test_import_https_proxy_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    _env(monkeypatch, DATABASE_URL="postgresql://u@h/db_test", SESSION_SECRET="s" * 32, IMPORT_HTTPS_PROXY="")
+    assert Settings(_env_file=None).import_https_proxy is None  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    "url", ["http://proxy.corp.local:3128", f"https://svc:{PROXY_PASSWORD}@10.0.0.1:8443", "HTTP://p:3128"]
+)
+def test_import_https_proxy_http_or_https(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    _env(
+        monkeypatch, DATABASE_URL="postgresql://u@h/db_test", SESSION_SECRET="s" * 32, IMPORT_HTTPS_PROXY=url
+    )
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.import_https_proxy is not None and s.import_https_proxy.get_secret_value() == url
+    assert PROXY_PASSWORD not in repr(s) + str(s) + s.model_dump_json()  # пароль прокси — секрет
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"socks5://svc:{PROXY_PASSWORD}@proxy:1080",
+        f"svc:{PROXY_PASSWORD}@proxy:3128",
+        "proxy.corp.local:3128",
+        "http://",
+        f"ftp://svc:{PROXY_PASSWORD}@proxy/",
+    ],
+)
+def test_import_https_proxy_bad_scheme_fails_at_start(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    _env(
+        monkeypatch, DATABASE_URL="postgresql://u@h/db_test", SESSION_SECRET="s" * 32, IMPORT_HTTPS_PROXY=url
+    )
+    with pytest.raises(ValidationError) as err:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+    text = str(err.value)
+    assert "IMPORT_HTTPS_PROXY" in text and "http://" in text  # понятный текст на русском
+    assert PROXY_PASSWORD not in text  # ошибка старта не печатает пароль

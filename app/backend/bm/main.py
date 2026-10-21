@@ -40,6 +40,7 @@ from bm.http.routers import (
     subscriptions,
     system,
 )
+from bm.notify import service as notify
 from bm.settings import Settings
 
 log = logging.getLogger("bm")
@@ -68,8 +69,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             default_fail_mode=settings.default_fail_mode,
         )
         await app.state.budget.ensure_partitions()
+        notify.configure(webhook_enabled=bool(settings.webhook_url))  # статус новых уведомлений (T073)
         yield
     finally:
+        notify.configure(webhook_enabled=False)
         await pool.close()
 
 

@@ -1,7 +1,7 @@
 """Задачи worker и планировщик (ADR-002): у каждой задачи свой интервал, одновременно задачу выполняет
 только один процесс (`pg_try_advisory_lock` на имя задачи), каждый запуск пишется в `job_run`.
 
-Новые задачи (импорт T061, пороги T071, подписки T051) добавляются в `default_jobs`.
+Новые задачи (импорт T061, пороги T071, подписки T051, webhook T073) добавляются в `default_jobs`.
 """
 
 import logging
@@ -15,7 +15,7 @@ from bm import metrics
 from bm.budget import subs
 from bm.budget.service import Budget
 from bm.clock import Clock
-from bm.notify import thresholds
+from bm.notify import channels, thresholds
 from bm.provider_import import pipeline
 from bm.reports import maintenance
 from bm.settings import Settings
@@ -28,6 +28,7 @@ SUBSCRIPTIONS_EVERY = timedelta(minutes=5)
 IMPORT_EVERY = timedelta(minutes=5)  # T061: ручной запуск подхватывается за ≤ 5 мин
 NOTIFY_EVERY = timedelta(seconds=60)  # T071: пороги, нет курса, резервы без отчёта
 DAILY = timedelta(days=1)  # T071: agg_daily и ретенция
+WEBHOOK_EVERY = timedelta(seconds=60)  # T073: доставка уведомлений во внешний канал
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +50,16 @@ def default_jobs(budget: Budget, settings: Settings | None = None) -> list[Job]:
         ),
         *report_jobs(budget, settings),
         *import_jobs(budget, settings),
+        *webhook_jobs(budget, settings),  # последней: такт доставляет уведомления, созданные в этом же такте
     ]
+
+
+def webhook_jobs(budget: Budget, settings: Settings | None) -> list[Job]:
+    """T073: доставка `pending` во внешний канал раз в минуту. Без `WEBHOOK_URL` задачи нет (0 соединений)."""
+    if settings is None or not settings.webhook_url:
+        return []
+    webhook = channels.Webhook(settings)
+    return [Job("webhook", WEBHOOK_EVERY, lambda: channels.deliver_pending(budget.pool, webhook))]
 
 
 def import_jobs(budget: Budget, settings: Settings | None) -> list[Job]:

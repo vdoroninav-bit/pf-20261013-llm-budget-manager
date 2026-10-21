@@ -68,6 +68,7 @@ async def audit_forbidden(
         object_type="operation",
         object_id=exc.action,
         after={"method": request.method, "path": request.url.path, "role": session.principal.role.value},
+        at=get_clock(request).now(),
     )
 
 

@@ -13,3 +13,6 @@ dist/
 
 # артефакты make check (SBOM, отчёты) — публикуются CI как артефакты, в git не хранятся
 deploy/ci/out/
+
+# стек из локальных процессов (deploy/local/stack.sh): кластер PostgreSQL, журналы, копии, сгенерированные секреты
+deploy/local/.state/

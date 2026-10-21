@@ -28,12 +28,17 @@ async def write(
     object_id: str | None = None,
     before: Mapping[str, Any] | None = None,
     after: Mapping[str, Any] | None = None,
-    at: datetime | None = None,
+    at: datetime,
 ) -> int:
-    """Добавляет запись; возвращает её id. `at=None` — время БД (now())."""
+    """Добавляет запись; возвращает её id.
+
+    `at` — время часов приложения (`Clock`), обязательно (14_tech_rulings.md, пакет 3, 3Б7): `listAudit`
+    фильтрует по датам МСК, и у приложения и БД должен быть один источник времени. `DEFAULT now()` у колонки
+    остаётся только страховкой для ручных вставок.
+    """
     audit_id: int = await conn.fetchval(
         "INSERT INTO audit_log(at, actor, action, object_type, object_id, before, after) "
-        "VALUES (coalesce($1, now()), $2, $3, $4, $5, $6::jsonb, $7::jsonb) RETURNING id",
+        "VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb) RETURNING id",
         at,
         actor[:200],
         action,

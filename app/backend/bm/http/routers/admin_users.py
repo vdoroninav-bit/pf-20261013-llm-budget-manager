@@ -8,7 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter
 
 from bm.access import admin_users as service
-from bm.http.deps import AdminSession, Conn
+from bm.http.deps import AdminSession, ClockDep, Conn
 from bm.http.schemas import AdminUser
 from bm.http.schemas_admin import AdminUserCreate, AdminUserList, AdminUserPatch, patch_of
 
@@ -22,7 +22,9 @@ async def list_admin_users(session: AdminSession, conn: Conn) -> AdminUserList:
 
 
 @router.post("", operation_id="createAdminUser", status_code=201)
-async def create_admin_user(body: AdminUserCreate, session: AdminSession, conn: Conn) -> AdminUser:
+async def create_admin_user(
+    body: AdminUserCreate, session: AdminSession, conn: Conn, clock: ClockDep
+) -> AdminUser:
     created = await service.create_user(
         conn,
         session.principal.login,
@@ -30,14 +32,15 @@ async def create_admin_user(body: AdminUserCreate, session: AdminSession, conn: 
         password=body.password,
         role=body.role,
         department_id=body.department_id,
+        now=clock.now(),
     )
     return AdminUser.model_validate(created)
 
 
 @router.patch("/{user_id}", operation_id="updateAdminUser")
 async def update_admin_user(
-    user_id: UUID, body: AdminUserPatch, session: AdminSession, conn: Conn
+    user_id: UUID, body: AdminUserPatch, session: AdminSession, conn: Conn, clock: ClockDep
 ) -> AdminUser:
     return AdminUser.model_validate(
-        await service.update_user(conn, session.principal.login, user_id, patch_of(body))
+        await service.update_user(conn, session.principal.login, user_id, patch_of(body), clock.now())
     )

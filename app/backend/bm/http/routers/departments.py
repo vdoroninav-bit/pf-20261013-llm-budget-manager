@@ -65,8 +65,12 @@ async def list_departments(
 
 
 @router.post("", operation_id="createDepartment", status_code=201)
-async def create_department(body: DepartmentCreate, session: AdminSession, conn: Conn) -> Department:
-    dep = await service.create_department(conn, session.principal.login, body.name, body.ad_group)
+async def create_department(
+    body: DepartmentCreate, session: AdminSession, conn: Conn, clock: ClockDep
+) -> Department:
+    dep = await service.create_department(
+        conn, session.principal.login, body.name, body.ad_group, clock.now()
+    )
     return Department.model_validate(dep)
 
 
@@ -81,18 +85,20 @@ async def get_department(
 
 @router.patch("/{department_id}", operation_id="updateDepartment")
 async def update_department(
-    department_id: UUID, body: DepartmentPatch, session: AdminSession, conn: Conn
+    department_id: UUID, body: DepartmentPatch, session: AdminSession, conn: Conn, clock: ClockDep
 ) -> Department:
-    dep = await service.update_department(conn, session.principal.login, department_id, patch_of(body))
+    dep = await service.update_department(
+        conn, session.principal.login, department_id, patch_of(body), clock.now()
+    )
     return Department.model_validate(dep)
 
 
 @router.put("/{department_id}/limits", operation_id="putDepartmentLimits")
 async def put_department_limits(
-    department_id: UUID, body: LimitSet, session: AdminSession, conn: Conn
+    department_id: UUID, body: LimitSet, session: AdminSession, conn: Conn, clock: ClockDep
 ) -> LimitSetOut:
     saved = await service.put_department_limits(
-        conn, session.principal.login, department_id, limits_kop(body)
+        conn, session.principal.login, department_id, limits_kop(body), clock.now()
     )
     return LimitSetOut.model_validate(saved)
 

@@ -6,10 +6,12 @@
 #   CHECK_STRICT=1   пропуск любого шага (нет фронтенда, trivy, образа) считается ошибкой — для CI и релиза
 #   IMAGE=bm:local   образ для Trivy (собирается make build, T087)
 #   FRONTEND_DIR     каталог фронтенда (по умолчанию app/frontend)
+#   TRIVY            команда Trivy (по умолчанию `trivy` из PATH). В CI (T092) — контейнер Trivy с сокетом Docker,
+#                    см. .github/workflows/ci.yml. Каталог проекта должен быть виден команде по тому же пути.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 2
 
 OUT="deploy/ci/out"
 CI="deploy/ci"
@@ -17,6 +19,8 @@ BACKEND="app/backend"
 FRONTEND_DIR="${FRONTEND_DIR:-app/frontend}"
 IMAGE="${IMAGE:-bm:local}"
 CHECK_STRICT="${CHECK_STRICT:-0}"
+CLIENT_DIR="app/client/budget_client"
+read -r -a TRIVY_CMD <<<"${TRIVY:-trivy}"
 
 # Версии инструментов закреплены (воспроизводимость). В закрытом контуре — из локального кэша uv/npm.
 CYCLONEDX_PY="cyclonedx-bom==7.5.0"
@@ -36,12 +40,19 @@ skip() {
 step() { echo; echo "=== $1 ==="; }
 
 # ---------- Python ----------
-step "Python: окружение поставки (без dev-зависимостей, все extras)"
+step "Python: окружение поставки (без dev-зависимостей и без extras) + эталонный клиент"
 PROD_VENV="$OUT/venv-prod"
-if UV_PROJECT_ENVIRONMENT="$ROOT/$PROD_VENV" uv sync --project "$BACKEND" --frozen --no-dev --all-extras --no-editable --quiet; then
+rm -rf "$PROD_VENV"
+if UV_PROJECT_ENVIRONMENT="$ROOT/$PROD_VENV" uv sync --project "$BACKEND" --frozen --no-dev --no-editable --quiet; then
   ok "python: uv sync --frozen (lock-файл согласован)"
 else
   fail "python: uv sync --frozen"
+fi
+# budget_client поставляется заказчику вместе с сервисом (3Б9): входит в SBOM. Своих зависимостей у него нет.
+if uv pip install --quiet --python "$PROD_VENV/bin/python" --no-deps "$CLIENT_DIR"; then
+  ok "python: budget_client в окружении поставки (для SBOM)"
+else
+  fail "python: установка budget_client"
 fi
 
 step "Python: SBOM CycloneDX"
@@ -62,7 +73,7 @@ else
 fi
 
 step "Python: уязвимости (pip-audit)"
-uv export --project "$BACKEND" --frozen --no-dev --all-extras --format requirements-txt --no-emit-project \
+uv export --project "$BACKEND" --frozen --no-dev --format requirements-txt --no-emit-project \
   --quiet -o "$OUT/requirements-prod.txt"
 IGNORE_ARGS=()
 if [[ -f "$CI/vuln-ignore.txt" ]]; then
@@ -89,7 +100,7 @@ else
 fi
 
 step "Python: архитектурные контракты (import-linter)"
-if (cd "$BACKEND" && uv run --frozen --all-extras lint-imports --config importlinter.ini --no-logo); then
+if (cd "$BACKEND" && uv run --frozen lint-imports --config importlinter.ini --no-logo); then
   ok "python: import-linter"
 else
   fail "python: import-linter"
@@ -116,6 +127,15 @@ if [[ -f "$FRONTEND_DIR/package.json" ]]; then
       else
         fail "npm: лицензии (см. $OUT/licenses-npm.txt)"
       fi
+      # Явная зависимость @tanstack/react-query (14_tech_rulings.md, пакет 3, 3Ф3): лицензия по SBOM.
+      python3 - "$OUT/sbom-npm.cdx.json" <<'PY' | tee -a "$OUT/licenses-npm.txt"
+import json, sys
+comps = json.load(open(sys.argv[1])).get("components", [])
+for c in comps:
+    if c.get("group") == "@tanstack" and c.get("name") == "react-query":
+        lic = ", ".join((x.get("license") or {}).get("id") or x.get("expression", "?") for x in c.get("licenses", []))
+        print(f"npm SBOM: @tanstack/react-query@{c.get('version')} — {lic or 'нет лицензии'}")
+PY
     else
       fail "npm: SBOM"
     fi
@@ -126,20 +146,27 @@ if [[ -f "$FRONTEND_DIR/package.json" ]]; then
     fi
   fi
 else
-  skip "npm: нет $FRONTEND_DIR/package.json (появится в T002)"
+  skip "npm: нет $FRONTEND_DIR/package.json"
 fi
 
 # ---------- образ ----------
 step "Образ: Trivy ($IMAGE)"
-if ! command -v trivy >/dev/null 2>&1; then
-  skip "trivy: не установлен"
+if [[ "${TRIVY_CMD[0]}" == "trivy" ]] && ! command -v trivy >/dev/null 2>&1; then
+  skip "trivy: не установлен (в CI — контейнер Trivy, T092)"
 elif ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  skip "trivy: нет образа $IMAGE (make build, T087)"
+  skip "trivy: нет образа $IMAGE (make build)"
 else
-  trivy image --quiet --format cyclonedx --output "$OUT/sbom-image.cdx.json" "$IMAGE" \
-    && ok "trivy: SBOM образа $OUT/sbom-image.cdx.json" || fail "trivy: SBOM образа"
-  trivy image --quiet --severity CRITICAL --exit-code 1 "$IMAGE" \
-    && ok "trivy: 0 critical" || fail "trivy: есть critical"
+  if "${TRIVY_CMD[@]}" image --quiet --format cyclonedx --output "$ROOT/$OUT/sbom-image.cdx.json" "$IMAGE"; then
+    ok "trivy: SBOM образа $OUT/sbom-image.cdx.json"
+  else
+    fail "trivy: SBOM образа"
+  fi
+  "${TRIVY_CMD[@]}" image --quiet --severity CRITICAL --exit-code 1 "$IMAGE" | tee "$OUT/trivy-critical.txt"
+  if [[ "${PIPESTATUS[0]}" -eq 0 ]]; then
+    ok "trivy: 0 critical"
+  else
+    fail "trivy: есть critical (см. $OUT/trivy-critical.txt)"
+  fi
 fi
 
 # ---------- итог ----------

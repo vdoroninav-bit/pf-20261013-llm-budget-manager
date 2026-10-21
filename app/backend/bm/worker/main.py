@@ -10,6 +10,7 @@ from bm.budget.service import Budget
 from bm.clock import SystemClock
 from bm.db.migrate import migrate
 from bm.db.pool import create_pool
+from bm.notify import service as notify
 from bm.settings import Settings
 from bm.worker.jobs import Scheduler, default_jobs
 
@@ -31,6 +32,7 @@ async def run(settings: Settings, stop: asyncio.Event) -> None:
             timeout_ms=settings.decision_timeout_ms,
             default_fail_mode=settings.default_fail_mode,
         )
+        notify.configure(webhook_enabled=bool(settings.webhook_url))  # статус новых уведомлений (T073)
         scheduler = Scheduler(pool, default_jobs(budget, settings), clock)
         log.info("worker_started")
         while not stop.is_set():

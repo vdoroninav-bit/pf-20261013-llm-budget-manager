@@ -28,5 +28,8 @@ export default defineConfig({
     include: ['src/**/*.test.{ts,tsx}'],
     environment: 'node',
     restoreMocks: true,
+    setupFiles: ['src/__tests__/support/setup.ts'],
+    // Предел на тест с запасом под общую нагрузку среды (см. setup.ts).
+    testTimeout: 30_000,
   },
 });

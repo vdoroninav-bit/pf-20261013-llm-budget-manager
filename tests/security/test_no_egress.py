@@ -154,3 +154,74 @@ async def test_webhook_client_cannot_reach_other_hosts() -> None:
 def test_webhook_works_without_import_flag() -> None:
     """Флаг импорта не нужен webhook: канал во внутреннюю сеть разрешён конституцией отдельно."""
     get_client("webhook", _settings(webhook_url="http://10.0.0.5/hook", import_enabled=False))
+
+
+# ---------------------------------------------------------------- прокси импорта (T062, пакет 2, Б4)
+
+PROXY_HOST, PROXY_PORT, PROXY_PASSWORD = "192.0.2.10", 3128, "Pr0xy-Secret-77"  # TEST-NET-1, RFC 5737
+PROXY = f"http://svc-import:{PROXY_PASSWORD}@{PROXY_HOST}:{PROXY_PORT}"
+
+
+def _proxies(client: httpx.AsyncClient) -> list[str]:
+    """URL прокси, смонтированных в клиенте (без прокси — пусто)."""
+    out: list[str] = []
+    for transport in client._mounts.values():
+        if transport is not None:
+            pool = transport._pool  # type: ignore[attr-defined]
+            url = pool._proxy_url
+            out.append(f"{url.scheme.decode()}://{url.host.decode()}:{url.port}")
+    return out
+
+
+def test_proxy_empty_means_direct() -> None:
+    for purpose in ("anthropic", "openai"):
+        client = get_client(purpose, _settings(import_enabled=True))  # type: ignore[arg-type]
+        assert _proxies(client) == []
+
+
+@pytest.mark.parametrize("purpose", ["anthropic", "openai"])
+def test_proxy_applies_to_provider_clients(purpose: str) -> None:
+    client = get_client(purpose, _settings(import_enabled=True, import_https_proxy=PROXY))  # type: ignore[arg-type]
+    assert _proxies(client) == [f"http://{PROXY_HOST}:{PROXY_PORT}"]
+    assert client._trust_env is False and client.follow_redirects is False
+
+
+def test_proxy_never_applies_to_webhook() -> None:
+    client = get_client(
+        "webhook",
+        _settings(webhook_url="http://10.0.0.5/hook", import_enabled=True, import_https_proxy=PROXY),
+    )
+    assert _proxies(client) == []
+
+
+def test_proxy_ignored_when_import_disabled(egress_guard: list[Any]) -> None:
+    """IMPORT_ENABLED=false при заданном прокси: EgressDisabled, ни одного соединения — и с прокси тоже."""
+    for purpose in ("anthropic", "openai"):
+        with pytest.raises(EgressDisabled):
+            get_client(purpose, _settings(import_https_proxy=PROXY))  # type: ignore[arg-type]
+    assert egress_guard == []
+
+
+async def test_provider_request_goes_to_proxy_only(
+    expect_egress_attempts: list[Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    """Запрос к api.anthropic.com при заданном прокси: единственная попытка соединения — к прокси."""
+    import logging
+
+    client = get_client("anthropic", _settings(import_enabled=True, import_https_proxy=PROXY))
+    with caplog.at_level(logging.DEBUG):
+        async with client:
+            with pytest.raises(httpx.TransportError):
+                await client.get("https://api.anthropic.com/v1/organizations/cost_report")
+            with pytest.raises(EgressForbidden):  # белый список хостов назначения не меняется
+                await client.get("https://example.com/")
+    assert [(str(h), int(p)) for h, p, *_ in expect_egress_attempts] == [(PROXY_HOST, PROXY_PORT)]
+    assert PROXY_PASSWORD not in caplog.text
+
+
+def test_standard_proxy_env_still_ignored_with_import_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HTTPS_PROXY", "http://203.0.113.1:3128")
+    monkeypatch.setenv("ALL_PROXY", "http://203.0.113.2:3128")
+    assert _proxies(get_client("anthropic", _settings(import_enabled=True))) == []
+    client = get_client("anthropic", _settings(import_enabled=True, import_https_proxy=PROXY))
+    assert _proxies(client) == [f"http://{PROXY_HOST}:{PROXY_PORT}"]

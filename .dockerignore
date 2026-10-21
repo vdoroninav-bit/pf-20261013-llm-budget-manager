@@ -4,6 +4,7 @@
 !tests/
 !deploy/
 !pytest.ini
+!design/
 !12_openapi.yaml
 
 **/.venv

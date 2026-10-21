@@ -1,4 +1,4 @@
-"""Изменение настроек: `apply(conn, change, actor)` — запись, аудит и `config_version += 1`
+"""Изменение настроек: `apply(conn, change, actor, at=now)` — запись, аудит и `config_version += 1`
 в одной транзакции.
 
 Все изменения справочников и политик идут только через `apply` (T042): так снимок конфигурации в api
@@ -34,10 +34,11 @@ class Change:
     run: Callable[[asyncpg.Connection], Awaitable[Applied]]
 
 
-async def apply(
-    conn: asyncpg.Connection, change: Change, actor: str, *, at: datetime | None = None
-) -> Applied:
-    """Выполняет изменение атомарно. Исключение из `run` откатывает и запись, и аудит, и версию."""
+async def apply(conn: asyncpg.Connection, change: Change, actor: str, *, at: datetime) -> Applied:
+    """Выполняет изменение атомарно. Исключение из `run` откатывает и запись, и аудит, и версию.
+
+    `at` — время записи аудита по часам приложения (`Clock`), обязательно (пакет 3, 3Б7).
+    """
     async with conn.transaction():
         applied = await change.run(conn)
         await audit.write(

@@ -51,11 +51,9 @@ SEED_DEFECT = pytest.mark.xfail(
     "снимок конфигурации их не видит (subject_unknown). Проверка CSV-инъекции покрыта "
     "tests/integration/test_reports.py::test_csv_neutralizes_formula_prefixes",
 )
-T061_AUDIT = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="T061: createProviderSource/updateProviderSource не пишут audit_log",
-)
+# Дефект T061 (3Б6) исправлен в T062: источники пишут аудит со временем часов приложения
+# (tests/integration/test_provider_sources_audit.py). 3Б7 закрыт в T073 (Backend 2): все записи аудита —
+# по часам приложения (tests/integration/test_audit_clock.py), пометка снята.
 
 CSV_HEADER = "period_start;department;model;source;amount_rub;original_currency;original_amount"
 PSEUDONYM = re.compile(r"emp-[0-9a-f]{10}")
@@ -326,7 +324,6 @@ async def test_6_3_thresholds_80_and_100_notify_once_per_period(
 # ---------------------------------------------------------------- 6.5 аудит изменений
 
 
-@T061_AUDIT
 async def test_6_5_audit_records_who_when_before_after(
     client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection
 ) -> None:

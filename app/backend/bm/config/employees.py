@@ -5,6 +5,7 @@
 """
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -72,14 +73,14 @@ async def get_employee(conn: asyncpg.Connection, pseudonym: str) -> dict[str, An
 
 
 async def put_employee_limits(
-    conn: asyncpg.Connection, actor: str, pseudonym: str, values: Mapping[str, int | None]
+    conn: asyncpg.Connection, actor: str, pseudonym: str, values: Mapping[str, int | None], now: datetime
 ) -> limits.LimitSet:
     async with conn.transaction():
         row = await _row(conn, pseudonym, lock=True)
-        return await put_limits(conn, actor, "employee", row["id"], values)
+        return await put_limits(conn, actor, "employee", row["id"], values, now)
 
 
-async def reveal(conn: asyncpg.Connection, actor: str, pseudonym: str) -> dict[str, Any]:
+async def reveal(conn: asyncpg.Connection, actor: str, pseudonym: str, now: datetime) -> dict[str, Any]:
     """Сопоставление псевдонима с учётной записью AD; запись в аудит в той же транзакции."""
     async with conn.transaction():
         row = await conn.fetchrow(
@@ -93,5 +94,6 @@ async def reveal(conn: asyncpg.Connection, actor: str, pseudonym: str) -> dict[s
             action="reveal_pseudonym",
             object_type="employee",
             object_id=pseudonym,
+            at=now,
         )
     return {"pseudonym": row["pseudonym"], "login": row["ad_login"], "display_name": row["display_name"]}

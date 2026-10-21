@@ -1,0 +1,171 @@
+# LLM Budget Manager — поставка одной командой (FR-037, 12_plan.md §8, 12_arch_decision.md «Сети compose»).
+#   cp deploy/.env.example deploy/.env    # заполнить секреты
+#   make up                               # = docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build --wait
+#
+# Сервисы: api (HTTP API + админка), worker (фоновые задачи и импорт), postgres:18, backup (pg_dump -Fc по расписанию).
+# Сети: core — internal: true (нет выхода наружу), в ней postgres и backup; edge — для опубликованного порта api
+# и исходящих соединений worker (импорт провайдеров, webhook во внутреннюю сеть). Принцип IV для api и worker
+# обеспечивают код bm.egress и тесты, а не сеть (ADR-006).
+#
+# Секреты (*_FILE): значения берутся из deploy/.env, compose кладёт их файлами в /run/secrets/ контейнера.
+# В окружение процесса и в `docker inspect` они не попадают. Пустой секрет — сервис не стартует (так задумано).
+name: bm
+
+x-app-image: &app-image
+  image: ${BM_IMAGE:-bm:local}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+    target: python-runtime
+
+# Общие настройки api и worker (12_plan.md §8; deploy/.env.example — источник истины по переменным).
+x-app-env: &app-env
+  # Без пароля в URL: пароль читает entrypoint из POSTGRES_PASSWORD_FILE и передаёт драйверу через PGPASSWORD.
+  DATABASE_URL: ${DATABASE_URL:-postgresql://bm@postgres:5432/bm}
+  POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+  SESSION_SECRET_FILE: /run/secrets/session_secret
+  SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+  UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+  RESERVATION_TTL_MIN: ${RESERVATION_TTL_MIN:-15}
+  DECISION_TIMEOUT_MS: ${DECISION_TIMEOUT_MS:-50}
+  DEFAULT_FAIL_MODE: ${DEFAULT_FAIL_MODE:-open}
+  IMPORT_ENABLED: ${IMPORT_ENABLED:-false}
+  IMPORT_HOUR_MSK: ${IMPORT_HOUR_MSK:-4}
+  IMPORT_RETRY_UNTIL_HOUR_MSK: ${IMPORT_RETRY_UNTIL_HOUR_MSK:-12}
+  IMPORT_WINDOW_DAYS: ${IMPORT_WINDOW_DAYS:-7}
+  WEBHOOK_URL: ${WEBHOOK_URL:-}
+  SUBS_WARN_PCT_DEFAULT: ${SUBS_WARN_PCT_DEFAULT:-50}
+  RETENTION_DETAIL_MONTHS: ${RETENTION_DETAIL_MONTHS:-12}
+  RETENTION_AGG_MONTHS: ${RETENTION_AGG_MONTHS:-36}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:18}
+    environment:
+      POSTGRES_USER: bm
+      POSTGRES_DB: bm
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      # Часовой пояс сервера БД — UTC; границы периодов по МСК считает приложение (принцип IX).
+      TZ: UTC
+      PGTZ: UTC
+    secrets: [postgres_password]
+    volumes:
+      # postgres:18 хранит данные в /var/lib/postgresql/18/docker; том монтируется на уровень выше.
+      - pgdata:/var/lib/postgresql
+    networks: [core]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bm -d bm -h 127.0.0.1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  api:
+    <<: *app-image
+    environment:
+      <<: *app-env
+      # Метрики нескольких процессов uvicorn (14_tech_rulings.md, Б6). Каталог только у api, на tmpfs;
+      # entrypoint очищает его при старте. С worker не делится (пакет 2, В1-6).
+      PROMETHEUS_MULTIPROC_DIR: /run/bm-metrics
+      # Первый администратор создаётся при первом запуске api; пароль меняется при первом входе.
+      ADMIN_INITIAL_LOGIN: ${ADMIN_INITIAL_LOGIN:-admin}
+      ADMIN_INITIAL_PASSWORD_FILE: /run/secrets/admin_initial_password
+    secrets: [postgres_password, session_secret, admin_initial_password]
+    tmpfs:
+      - /run/bm-metrics:mode=0700,uid=10001,gid=10001
+    ports:
+      - "${BIND_ADDR}:${API_PORT}:8080"
+    networks: [core, edge]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # readyz: БД отвечает и применена последняя миграция образа.
+      test: ["CMD", "python", "/app/healthcheck.py", "api"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    restart: unless-stopped
+
+  worker:
+    <<: *app-image
+    command: ["python", "-m", "bm.worker"]
+    environment:
+      <<: *app-env
+      # Импорт расхода выполняет только worker: ключи провайдеров и прокси есть только у него.
+      # Прокси — только для импорта (14_tech_rulings.md, пакет 2, Б4). Пусто — прямой выход к API провайдеров.
+      IMPORT_HTTPS_PROXY: ${IMPORT_HTTPS_PROXY:-}
+      ANTHROPIC_ADMIN_KEY_FILE: /run/secrets/anthropic_admin_key
+      OPENAI_ADMIN_KEY_FILE: /run/secrets/openai_admin_key
+    secrets: [postgres_password, session_secret, anthropic_admin_key, openai_admin_key]
+    networks: [core, edge]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # api применяет миграции первым; worker тоже вызывает migrate (под advisory lock), порядок для наглядности.
+      api:
+        condition: service_healthy
+    healthcheck:
+      # Процесс worker жив и БД доступна (у worker нет HTTP).
+      test: ["CMD", "python", "/app/healthcheck.py", "worker"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  backup:
+    image: ${POSTGRES_IMAGE:-postgres:18}
+    # Резервная копия при старте и далее раз в сутки; хранится BACKUP_KEEP последних.
+    command: ["bash", "/backup/backup.sh", "--loop"]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: bm
+      PGDATABASE: bm
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      BACKUP_DIR: /backups
+      BACKUP_KEEP: ${BACKUP_KEEP:-14}
+      TZ: UTC
+    secrets: [postgres_password]
+    volumes:
+      - ./backup:/backup:ro
+      - backups:/backups
+    networks: [core]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # Последняя успешная копия не старше 26 ч, и БД отвечает.
+      test: ["CMD", "bash", "/backup/backup.sh", "--healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    restart: unless-stopped
+
+networks:
+  core:
+    internal: true
+  edge: {}
+
+volumes:
+  pgdata: {}
+  backups: {}
+
+secrets:
+  postgres_password:
+    environment: POSTGRES_PASSWORD
+  session_secret:
+    environment: SESSION_SECRET
+  admin_initial_password:
+    environment: ADMIN_INITIAL_PASSWORD
+  anthropic_admin_key:
+    environment: ANTHROPIC_ADMIN_KEY
+  openai_admin_key:
+    environment: OPENAI_ADMIN_KEY

@@ -7,10 +7,12 @@
   пересчитываются конвейером, в реестр уходит дельта;
 - удаление снимает ссылку вызывающих систем на источник (сверка SC-005 по нему больше не строится).
 
-Изменения — через `config.apply` (аудит «было/стало», `config_version`).
+Изменения — через `config.apply` (аудит «было/стало», `config_version`); время записи аудита — часы
+приложения `now` (14_tech_rulings.md, пакет 3, 3Б6/3Б7).
 """
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -68,7 +70,9 @@ def _check_kind(provider: str, kind: str) -> None:
         )
 
 
-async def create(conn: asyncpg.Connection, actor: str, body: Mapping[str, Any]) -> dict[str, Any]:
+async def create(
+    conn: asyncpg.Connection, actor: str, body: Mapping[str, Any], now: datetime
+) -> dict[str, Any]:
     _check_kind(body["provider"], body["kind"])
 
     async def run(c: asyncpg.Connection) -> Applied:
@@ -92,13 +96,13 @@ async def create(conn: asyncpg.Connection, actor: str, body: Mapping[str, Any]) 
         after = _out(row)
         return Applied(object_id=after["id"], after=after, result=after)
 
-    applied = await apply(conn, Change("create", "provider_source", run), actor)
+    applied = await apply(conn, Change("create", "provider_source", run), actor, at=now)
     result: dict[str, Any] = applied.result
     return result
 
 
 async def update(
-    conn: asyncpg.Connection, actor: str, source_id: UUID, patch: Mapping[str, Any]
+    conn: asyncpg.Connection, actor: str, source_id: UUID, patch: Mapping[str, Any], now: datetime
 ) -> dict[str, Any]:
     async def run(c: asyncpg.Connection) -> Applied:
         old = await _get(c, source_id, lock=True)
@@ -120,12 +124,12 @@ async def update(
         after = _out(row)
         return Applied(object_id=str(source_id), before=before, after=after, result=after)
 
-    applied = await apply(conn, Change("update", "provider_source", run), actor)
+    applied = await apply(conn, Change("update", "provider_source", run), actor, at=now)
     result: dict[str, Any] = applied.result
     return result
 
 
-async def delete(conn: asyncpg.Connection, actor: str, source_id: UUID) -> None:
+async def delete(conn: asyncpg.Connection, actor: str, source_id: UUID, now: datetime) -> None:
     async def run(c: asyncpg.Connection) -> Applied:
         before = _out(await _get(c, source_id, lock=True))
         await c.execute(
@@ -134,4 +138,4 @@ async def delete(conn: asyncpg.Connection, actor: str, source_id: UUID) -> None:
         await c.execute("DELETE FROM provider_source WHERE id = $1", source_id)
         return Applied(object_id=str(source_id), before=before)
 
-    await apply(conn, Change("delete", "provider_source", run), actor)
+    await apply(conn, Change("delete", "provider_source", run), actor, at=now)

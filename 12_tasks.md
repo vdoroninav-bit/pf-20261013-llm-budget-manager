@@ -309,7 +309,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
   - Готово: тесты T060 на `RecordedSource` проходят, `make test` зелёный.
   - Дефект против FR-031 (14_tech_rulings.md, пакет 3, 3Б6): изменения справочника источников не пишутся в аудит. Исправляется первым шагом T062; T061 не переоткрывается.
   - Зависимости: T017, T019, T060.
-- [ ] **T062 [P] [US5] [backend] Коннектор Anthropic.**
+- [x] **T062 [P] [US5] [backend] Коннектор Anthropic.**
   - Первый шаг (14_tech_rulings.md, пакет 3, 3Б6): `createProviderSource`, `updateProviderSource`, `deleteProviderSource` идут через `config.apply` (аудит «было/стало», `config_version`); снят точечный `xfail` с `tests/acceptance/test_us6_reports_roles.py::test_6_5_audit_records_who_when_before_after`. Без этого T062 не закрывается.
   - Файлы: `bm/provider_import/sources/anthropic.py`, `tests/integration/test_anthropic_source.py`; для прокси — `bm/egress/client.py`, `bm/settings.py`, `tests/security/test_no_egress.py`.
   - Работа: `cost_report` с шагом `1d`, группировка по `workspace_id` и `description`, пагинация, сумма в USD; модель извлекается из `description`. Ключ берётся только из `ANTHROPIC_ADMIN_KEY(_FILE)`, HTTP-клиент — только через `egress`. В тестах вместо сети — транспорт httpx с фикстурами.
@@ -322,7 +322,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
     - тесты: прокси пусто → клиент без прокси; прокси задан → прокси у клиента `anthropic`, у `webhook` его нет; `IMPORT_ENABLED=false` при заданном прокси → `EgressDisabled` и 0 соединений, включая соединение с прокси; URL с паролем не появляется в журнале.
   - Готово: `make test`.
   - Зависимости: T061.
-- [ ] **T063 [P] [US5] [backend] 🔻3 Коннектор OpenAI.**
+- [x] **T063 [P] [US5] [backend] 🔻3 Коннектор OpenAI.**
   - Остаётся в v1 (контрольная точка недели 5, `14_checkpoint_week5.md`).
   - Файлы: `bm/provider_import/sources/openai.py`, `tests/integration/test_openai_source.py`.
   - Работа: `GET /organization/costs`, `bucket_width=1d`, `group_by=project_id,line_item`, пагинация. Названия полей сумм сверяются с фикстурами спайка.
@@ -369,7 +369,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
   - Доступность (14_tech_rulings.md, пакет 2, Ф1): axe не подключается. Контраст проверяет тест `src/__tests__/contrast.test.ts`: функция по формуле WCAG 2.x (без зависимостей) считает отношение для всех пар из 13_design.md §8 по значениям `design/tokens.json` в обеих темах; порог 4,5:1 для текста и 3:1 для `border-strong`. ARIA и клавиатура — запросами `getByRole`/`getByLabelText` и проверками фокуса, как в T043.
   - Готово: `npm --prefix app/frontend run test && npm --prefix app/frontend run build`.
   - Зависимости: T043.
-- [ ] **T073 [US6] [backend] 🔻2 Webhook-канал.**
+- [x] **T073 [US6] [backend] 🔻2 Webhook-канал.**
   - **Входит в v1** (контрольная точка недели 5, `14_checkpoint_week5.md`). Если к началу T089 задача не закрыта с выводом команды готовности, применяется 🔻2: `WEBHOOK_URL` игнорируется, уведомления создаются с `webhook_status=disabled`, ветка `pending` удаляется.
   - Первый шаг (14_tech_rulings.md, пакет 3, 3Б7): время записи аудита берётся из `Clock` приложения во всех местах записи (`config.apply`, `forbidden_access`, вход, `reveal_pseudonym`, импорт AD); `DEFAULT now()` у колонки остаётся. Тест: под `FrozenClock` запись видна в `listAudit` за замороженный интервал, `at` равно замороженному времени.
   - Файлы: `bm/notify/channels.py` (`Webhook` через `egress("webhook")`, повтор 3 раза, `webhook_status`), `tests/integration/test_webhook.py` (локальный HTTP-сервер на 127.0.0.1).
@@ -423,7 +423,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
     - в CI (T092): та же цепочка в Docker с журналом прогона для того же SHA.
     - `[x]` ставится только при наличии журнала CI. Без него задача остаётся `[ ]` со статусом «проверено локально», а сборка образа и стек в Docker уходят в `16_release.md` как НЕ ПРОВЕРЕНО.
   - Зависимости: T031, T043.
-- [ ] **T088 [P] [—] [devops] SDL-проверки.**
+- [x] **T088 [P] [—] [devops] SDL-проверки.**
   - Файлы: `deploy/ci/check.sh`, `deploy/ci/licenses-allow.txt` (MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, PostgreSQL, PSF-2.0, 0BSD, Python-2.0), цели `check` и `egress-host-check`.
   - Работа: CycloneDX SBOM для Python и npm, pip-audit, npm audit, Trivy по образу. Сборка падает на GPL, AGPL, SSPL, LGPL и на `@react-admin/ra-*`. В SBOM учитывается прямая зависимость `python-multipart` (Apache-2.0, добавлена в T041). MPL-2.0 в белый список не добавляется (пакет 2, Ф1).
   - Пакет 3 (3Д3, 3Б9, 3К, 3Ф3): MIT-0 — в белом списке; `certifi` (MPL-2.0) — узкое исключение (пакет и версия) в `licenses-exceptions.txt`, подтверждение юриста — открытый пункт `16_release.md`; `app/client/budget_client` включён в SBOM; SBOM поставки — без extras; npm-SBOM подтверждает лицензию `@tanstack/react-query`.
@@ -456,7 +456,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
     - драйвер `BM_STACK=compose|local` в `tests/failover/stack.py`. В режиме `local`: `stop` = SIGTERM, до 10 с ожидания, затем SIGKILL; `kill` = SIGKILL группы процессов `api`; проверка в БД — по `DATABASE_URL` локального кластера; управление процессами — через `deploy/local/stack.sh` (T087). Если остановить PostgreSQL нельзя, эта часть SC-002 пропускается с причиной и помечается НЕ ПРОВЕРЕНО.
   - Готово: `make test` без этих двух `xfail`; `make up-local && BM_STACK=local make failover` — SC-002 и SC-003 PASS (статус гейта — PASS-замена).
   - Зависимости: T087.
-- [ ] **T095 [P] [US4] [frontend] Доводка пакета 3** (14_tech_rulings.md, пакет 3, 3Ф2, 3Ф3, 3Ф5).
+- [x] **T095 [P] [US4] [frontend] Доводка пакета 3** (14_tech_rulings.md, пакет 3, 3Ф2, 3Ф3, 3Ф5).
   - Файлы: `src/resources/subscriptions/SubscriptionCreate.tsx`, тесты.
   - Работа:
     - список сотрудников подразделения в форме подписки загружается всеми страницами (`page_size=200`, пока не набран `total`). Тест: 450 сотрудников → 450 в списке, три запроса по контракту;

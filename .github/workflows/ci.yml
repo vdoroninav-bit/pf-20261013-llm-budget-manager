@@ -1,0 +1,174 @@
+# CI LLM Budget Manager (T092; 14_tech_rulings.md, пакет 3, 3Д1(б), 3Д4).
+#
+# Что проверяет (все шаги — команды Makefile, как у разработчика и на стенде заказчика):
+#   test     — make lint, make compose-check, make test против сервиса postgres:18 (закрывает разрыв PG 16 / PG 18),
+#              тесты и сборка фронтенда в контейнере node:24-slim (тот же образ, что стадия node-build Dockerfile)
+#   delivery — make build, make up && make smoke && make backup && make restore && make smoke, make failover,
+#              CHECK_STRICT=1 make check (Trivy по образу), попытка make egress-host-check
+# Артефакты прогона: SBOM и сводка make check (deploy/ci/out), журналы compose.
+#
+# Сторонних actions — только actions/checkout. Секретов нет: тестам не нужны ключи провайдеров, а пароли стенда
+# генерируются в самом прогоне (openssl rand) и живут только на раннере.
+# Результат засчитывается в релиз только с журналом прогона (gh run view --log) для того же SHA (3Д1(б)).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Версии инструментов закреплены (воспроизводимость). uv ставится из PyPI той же версии, что в Dockerfile.
+  UV_VERSION: "0.11.32"
+  NODE_IMAGE: "node:24-slim"
+  # [Гипотеза] тег не проверен из среды разработки (реестры закрыты); обновлять вместе с журналом CI.
+  TRIVY_IMAGE: "aquasec/trivy:0.58.0"
+  # uv скачивает Python 3.13 сам (на раннере его может не быть).
+  UV_PYTHON_DOWNLOADS: automatic
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  test:
+    name: lint + test (PostgreSQL 18) + frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: bm
+          POSTGRES_PASSWORD: bm
+          POSTGRES_DB: bm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bm -d bm_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql://bm:bm@127.0.0.1:5432/bm_test
+      # Статическая проверка compose обязательна: без docker compose тесты tests/deploy падают, а не пропускаются.
+      BM_REQUIRE_COMPOSE: "1"
+      # vitest и сборка фронтенда — отдельным шагом в контейнере Node 24.
+      SKIP_FRONTEND: "1"
+    steps:
+      # [Гипотеза] версия v5 не проверена из среды разработки (API GitHub закрыт); при ошибке — actions/checkout@v4.
+      - uses: actions/checkout@v5
+
+      - name: Инструменты (uv)
+        run: |
+          python3 -m pip install --user "uv==${UV_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Версии
+        run: |
+          uv --version
+          docker version --format 'docker {{.Server.Version}}'
+          docker compose version
+          psql "$DATABASE_URL" -Atc 'SHOW server_version' || true
+
+      - name: make lint
+        run: make lint
+
+      - name: make compose-check (docker compose config + tests/deploy)
+        run: make compose-check
+
+      - name: make test (PostgreSQL 18)
+        run: make test
+
+      - name: Frontend — npm ci, vitest, build (Node 24)
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src/app/frontend "$NODE_IMAGE" \
+            sh -c 'npm ci --no-audit --no-fund && npm run test && npm run build'
+
+  delivery:
+    name: build + up/smoke/backup/restore + failover + check
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      IMAGE: bm:local
+      BM_IMAGE: bm:local
+    steps:
+      # [Гипотеза] см. выше.
+      - uses: actions/checkout@v5
+
+      - name: Инструменты (uv)
+        run: |
+          python3 -m pip install --user "uv==${UV_VERSION}"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: deploy/.env стенда CI (секреты генерируются здесь, в журнал не печатаются)
+        run: |
+          cp deploy/.env.example deploy/.env
+          set_var() { sed -i "s|^$1=.*|$1=$2|" deploy/.env; }
+          set_var POSTGRES_PASSWORD "$(openssl rand -hex 24)"
+          set_var SESSION_SECRET "$(openssl rand -hex 32)"
+          set_var ADMIN_INITIAL_PASSWORD "init-$(openssl rand -hex 12)"
+          set_var BM_ADMIN_PASSWORD "ci-$(openssl rand -hex 12)"
+          # Пароль после смены нужен отказным тестам (tests/failover берёт BM_ADMIN_PASSWORD из окружения).
+          echo "::add-mask::$(grep '^BM_ADMIN_PASSWORD=' deploy/.env | cut -d= -f2)"
+          echo "BM_ADMIN_PASSWORD=$(grep '^BM_ADMIN_PASSWORD=' deploy/.env | cut -d= -f2)" >> "$GITHUB_ENV"
+
+      - name: make build
+        run: make build
+
+      - name: Digest базовых образов (для закрепления по @sha256 в Dockerfile)
+        run: |
+          for img in python:3.13-slim "$NODE_IMAGE" postgres:18; do
+            docker pull -q "$img" >/dev/null
+            docker image inspect --format '{{index .RepoDigests 0}}' "$img"
+          done
+
+      - name: make up && make smoke && make backup && make restore && make smoke
+        run: make up && make smoke && make backup && make restore && make smoke
+
+      - name: make failover (SC-002, SC-003)
+        run: make failover
+
+      - name: CHECK_STRICT=1 make check (SBOM, лицензии, pip-audit, npm audit, Trivy по образу)
+        env:
+          CHECK_STRICT: "1"
+          # Trivy в контейнере: сокет Docker для доступа к образу, каталог проекта — по тому же пути (SBOM в deploy/ci/out).
+          TRIVY: >-
+            docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
+            -v ${{ github.workspace }}:${{ github.workspace }} -v trivy-cache:/root/.cache/trivy
+            ${{ env.TRIVY_IMAGE }}
+        run: make check
+
+      - name: Попытка make egress-host-check (root на раннере)
+        # Попытка (3Д1(б)): результат виден в журнале; сбой не роняет прогон — гейт ставит QA по журналу (T089).
+        continue-on-error: true
+        run: sudo env "PATH=$PATH" "HOME=$HOME" "BM_ADMIN_PASSWORD=$BM_ADMIN_PASSWORD" make egress-host-check
+
+      - name: Журналы стека
+        if: always()
+        run: |
+          docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps -a || true
+          docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs --no-color > compose-logs.txt 2>&1 || true
+
+      - name: Остановить стек
+        if: always()
+        run: docker compose -f deploy/docker-compose.yml --env-file deploy/.env down -v || true
+
+      # Выгрузка артефактов без сторонних actions: содержимое печатается в журнал прогона (он и есть доказательство
+      # для релиза), а SBOM — в сжатом виде base64, восстанавливается из журнала: base64 -d | gunzip.
+      - name: Артефакты (сводка make check, SBOM) — в журнал
+        if: always()
+        run: |
+          echo "=== deploy/ci/out/summary.txt ==="; cat deploy/ci/out/summary.txt || true
+          for f in deploy/ci/out/sbom-*.cdx.json; do
+            [ -f "$f" ] || continue
+            echo "=== $f (gzip|base64) sha256=$(sha256sum "$f" | cut -d' ' -f1) ==="
+            gzip -9c "$f" | base64 -w 0; echo
+          done
+          echo "=== compose-logs.txt (хвост) ==="; tail -n 300 compose-logs.txt || true

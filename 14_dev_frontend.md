@@ -397,3 +397,48 @@ check-dist: внешних адресов нет (разрешённые namespa
 
    Всё это есть в контракте 1.0.2.
 3. Для дизайнера, к сведению: значение периода аудита по умолчанию в screens.md §11 не задано (см. отклонение 3).
+
+---
+
+## 2026-10-21 — T095 «Доводка пакета 3» (14_tech_rulings.md, 3Ф2, 3Ф3, 3Ф4, 3Ф5)
+
+**Итог:** T095 закрыта (`[x]`). Vitest зелёный 3 прогона подряд (363/363), тайпчек и `npm run build` с check-dist — exit 0.
+
+### Что сделано
+- **3Ф2 — сотрудники всеми страницами.** Новый `src/api/allPages.ts` (`fetchAllPages`): запрашивает страницы по `page_size=200` (`MAX_PAGE_SIZE` из `api/resources.ts`), пока не набран `total`. На пустой странице раньше `total` загрузка останавливается, чтобы не уйти в бесконечный цикл. `SubscriptionCreate.tsx` вместо `useGetList` (первая страница) вызывает `useQuery` с `fetchAllPages`, ключ `['bm','listEmployees','all',<department_id>]`.
+  Тесты в `subscriptions.test.tsx`:
+  - 450 сотрудников → в списке 450 вариантов плюс «Выберите…», ровно три запроса `{department_id, page: 1|2|3, page_size: 200}`, все сверены с контрактом (`violations = []`); сотрудника № 201 (`emp-00000000c9`) можно назначить;
+  - завышенный `total` и пустая вторая страница → два запроса, загрузка останавливается.
+  Красная фаза: до правки оба теста падали (1 запрос, 200 вариантов).
+- **3Ф3 — `@tanstack/react-query`.** Один экземпляр в дереве, версия удовлетворяет требованию react-admin (peer `^5.83.0`, зависимость `^5.90.2`):
+  ```
+  bm-admin@0.1.0
+  +-- @tanstack/react-query@5.104.2
+  +-- ra-core@5.15.4
+  | `-- @tanstack/react-query@5.104.2 deduped
+  `-- react-admin@5.15.4
+    +-- @tanstack/react-query@5.104.2 deduped
+    `-- ra-ui-materialui@5.15.4
+      `-- @tanstack/react-query@5.104.2 deduped
+  ```
+  `@tanstack/query-core@5.104.2` в `node_modules` тоже один. Лицензию подтверждает SBOM в T088 (DevOps).
+- **3Ф4 — «Было / Стало».** Кнопка с `aria-expanded` уже стоит, тест в `journals.test.tsx` есть. Ничего не менял.
+- **3Ф5 — период аудита.** Константа `AUDIT_DEFAULT_DAYS = 7` перенесена в общий модуль `src/config/ui.ts`. `resources/audit/index.tsx` считает `from = addDays(today, 1 - AUDIT_DEFAULT_DAYS)`. Новый тест проверяет значение 7, импорт из `config/ui` и то, что в экране не осталось литерала `addDays(today, -N)`. Тест запроса `from=2026-10-08, to=2026-10-14` проходит, как и раньше.
+- **Стабильность тестов.** Под нагрузкой общей среды (2 CPU, параллельно идут прогоны backend) падали разные тесты: `findBy*` ждёт по умолчанию 1 с, на тест отводится 5 с. Добавлен `src/__tests__/support/setup.ts` с `asyncUtilTimeout: 5000`, в `vite.config.ts` — `setupFiles` и `testTimeout: 30_000`. Проверки не ослаблены, подняты только пределы ожидания.
+
+### Команды и вывод (сокращённо)
+```
+npx vitest run  ×3 подряд
+  run1: Test Files 28 passed (28) | Tests 363 passed (363) | 378 s | exit 0
+  run2: Test Files 28 passed (28) | Tests 363 passed (363) | 395 s | exit 0
+  run3: Test Files 28 passed (28) | Tests 363 passed (363) | 407 s | exit 0
+npm run typecheck   → exit 0
+npm run build       → dist/assets/index-*.js 1 285,73 kB; check-dist: внешних адресов нет; exit 0
+```
+
+### Отклонения
+1. Помимо `SubscriptionCreate.tsx` изменены `src/api/allPages.ts` (новый), `src/config/ui.ts`, `src/resources/audit/index.tsx`, `vite.config.ts` и `src/__tests__/support/setup.ts` (новый). Всё в зоне frontend.
+2. Пределы ожидания в тестах подняты (см. выше). Причина — нагрузка среды, а не логика.
+
+### Вопросы техлиду
+Нет. Дизайнеру по-прежнему нужно дописать значение «7 суток МСК» в `design/screens.md` §11 (3Ф5).

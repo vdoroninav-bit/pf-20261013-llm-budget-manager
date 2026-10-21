@@ -16,6 +16,8 @@ from bm.domain.periods import MSK
 from bm.domain.types import PeriodKind
 from tests.fixtures.seed import Seed
 
+AUDIT_AT = datetime(2026, 10, 14, 12, 0, tzinfo=MSK)  # время записи аудита передаётся явно (пакет 3, 3Б7)
+
 pytestmark = pytest.mark.db
 
 
@@ -58,7 +60,7 @@ def _create_department(name: str, *, fail_after_insert: bool = False) -> Change:
 
 async def test_apply_writes_change_audit_and_bumps_version(db: asyncpg.Connection) -> None:
     v0 = await _version(db)
-    applied = await apply(db, _create_department("Маркетинг"), actor="admin")
+    applied = await apply(db, _create_department("Маркетинг"), actor="admin", at=AUDIT_AT)
     assert isinstance(applied.result, UUID)
     assert await db.fetchval("SELECT name FROM department WHERE id = $1", applied.result) == "Маркетинг"
     row = await db.fetchrow(
@@ -78,7 +80,7 @@ async def test_apply_writes_change_audit_and_bumps_version(db: asyncpg.Connectio
 async def test_apply_is_atomic(db: asyncpg.Connection) -> None:
     v0 = await _version(db)
     with pytest.raises(RuntimeError):
-        await apply(db, _create_department("Сбой", fail_after_insert=True), actor="admin")
+        await apply(db, _create_department("Сбой", fail_after_insert=True), actor="admin", at=AUDIT_AT)
     assert await db.fetchval("SELECT count(*) FROM department") == 0
     assert await db.fetchval("SELECT count(*) FROM audit_log") == 0
     assert await _version(db) == v0
@@ -88,7 +90,7 @@ async def test_apply_inside_outer_transaction_rolls_back_with_it(db: asyncpg.Con
     v0 = await _version(db)
     with pytest.raises(LookupError):
         async with db.transaction():
-            await apply(db, _create_department("Внутри"), actor="admin")
+            await apply(db, _create_department("Внутри"), actor="admin", at=AUDIT_AT)
             raise LookupError
     assert await db.fetchval("SELECT count(*) FROM department") == 0
     assert await _version(db) == v0
@@ -238,7 +240,7 @@ async def test_ensure_fresh_reloads_after_apply(
             object_id=str(world["dep"]), before={"policy_mode": "enforce"}, after={"policy_mode": "warn"}
         )
 
-    await apply(db, Change(action="update", object_type="department", run=run), actor="admin")
+    await apply(db, Change(action="update", object_type="department", run=run), actor="admin", at=AUDIT_AT)
     fresh = await cache.ensure_fresh(db, clock.now())
     assert fresh is not first and fresh.version == first.version + 1
     assert fresh.departments[world["dep"]].policy_mode == "warn"

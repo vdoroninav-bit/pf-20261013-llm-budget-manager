@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Единый прогон тестов: локально (make test / make test-unit) и в контейнере (make test-docker).
-#   run-tests.sh unit  — pytest tests/unit + vitest, без БД и Docker
-#   run-tests.sh full  — проверка БД, pytest (unit, contract, integration, acceptance, security),
+#   run-tests.sh unit  — pytest tests/unit tests/deploy + vitest, без БД и Docker
+#   run-tests.sh full  — проверка БД, pytest (unit, contract, integration, acceptance, security, deploy),
 #                        import-linter, vitest
 # Переменные:
 #   DATABASE_URL     строка подключения к ТЕСТОВОЙ БД (только для full). Тесты пересоздают схему,
@@ -16,7 +16,7 @@ cd "$ROOT"
 
 BACKEND="app/backend"
 FRONTEND_DIR="${FRONTEND_DIR:-app/frontend}"
-UVR=(uv run --project "$BACKEND" --frozen --all-extras)
+UVR=(uv run --project "$BACKEND" --frozen)
 
 run_pytest() {
   local rc=0
@@ -71,7 +71,7 @@ run_frontend() {
 case "$MODE" in
   unit)
     echo "=== pytest tests/unit ==="
-    run_pytest tests/unit
+    run_pytest tests/unit tests/deploy
     echo "=== frontend ==="
     run_frontend
     ;;
@@ -79,9 +79,9 @@ case "$MODE" in
     echo "=== БД ==="
     check_db
     echo "=== pytest ==="
-    run_pytest tests/unit tests/contract tests/integration tests/acceptance tests/security
+    run_pytest tests/unit tests/contract tests/integration tests/acceptance tests/security tests/deploy
     echo "=== import-linter ==="
-    (cd "$BACKEND" && uv run --frozen --all-extras lint-imports --config importlinter.ini --no-logo)
+    (cd "$BACKEND" && uv run --frozen lint-imports --config importlinter.ini --no-logo)
     echo "=== frontend ==="
     run_frontend
     ;;

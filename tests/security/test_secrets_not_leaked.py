@@ -22,9 +22,6 @@ from tests.security.test_no_content import db_dump, log_text
 pytestmark = pytest.mark.db
 
 KEYS = (ANTHROPIC_KEY, OPENAI_KEY)
-T062 = pytest.mark.xfail(
-    strict=True, raises=(AssertionError, ImportError), reason="T062: коннектор Anthropic"
-)
 
 
 @pytest.fixture
@@ -93,7 +90,6 @@ async def test_import_api_never_returns_keys(
     assert_no_keys("дамп БД", await db_dump(db))
 
 
-@T062
 @pytest.mark.parametrize("status", [200, 401, 500])
 async def test_connector_run_never_logs_or_stores_key(
     app: Any, settings: Any, seed: Seed, db: asyncpg.Connection, caplog: pytest.LogCaptureFixture, status: int

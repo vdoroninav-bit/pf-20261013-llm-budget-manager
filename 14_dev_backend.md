@@ -471,3 +471,121 @@ make lint → exit 0 (141 files already formatted)
 2. **T061 (Backend 1):** `createProviderSource` и `updateProviderSource` не пишут `audit_log` (FR-031), поэтому `test_6_5_audit_records_who_when_before_after` помечен точечным `xfail` с причиной T061. Снять пометку после исправления.
 3. **Аудит изменений через `config.apply` (T042):** время записи берётся из БД (`now()`), а не из `Clock`. В проде это одно и то же, но в тестах с `FrozenClock` дата аудита не совпадает с замороженной. Переводить ли `apply` на `Clock`?
 4. **Зависимость от модуля Backend 1:** отчёты и прослеживаемость используют публичные функции `bm.budget.subs` (`charged_to`, `needed_months`, `month_totals`, `amount`, `Charged`). Если Backend 1 меняет их сигнатуры, нужно сообщить Backend 2.
+
+## 2026-10-21 — Backend 1: аудит справочника источников (3Б6), T062 (коннектор Anthropic + `IMPORT_HTTPS_PROXY`), T063 (коннектор OpenAI), T091 (руководство по интеграции)
+
+### Что сделано
+- **3Б6, первый шаг T062.** Записи аудита создавались и раньше: `provider_import/catalog.py` шёл через `config.apply`. Дефект был в другом: время бралось из `now()` БД, и при `FrozenClock` записи не попадали в фильтр `listAudit`. Теперь `create/update/delete` получают `now` от `Clock` (роутер `provider_sources.py`, `ClockDep`) и передают `at=now` в `apply`. Новый тест `tests/integration/test_provider_sources_audit.py` (2) проверяет `before`/`after`, `at` = замороженное время, `config_version += 3`, а также что отклонённое изменение в аудит не пишется. Красная фаза: `r["at"] == now` → False. Точечную пометку с `test_6_5` я сначала переназначил на 3Б7: остаток падения давал `updateAdminUser`, зона Backend 2. Backend 2 закрыл 3Б7 и снял пометку, теперь `test_6_5` зелёный без `xfail`.
+- **`IMPORT_HTTPS_PROXY` (Б4).**
+  - `bm/settings.py`: поле `SecretStr | None`, по умолчанию пусто. Схема только `http(s)://` с хостом, иначе ошибка старта на русском. Разбор через `pydantic.AnyUrl`, потому что `urllib` в `bm.settings` запрещён import-linter'ом. В `model_config` включён `hide_input_in_errors=True`: в ошибке старта нет значений, в том числе пароля прокси и ключей.
+  - `bm/egress/client.py`: явный `proxy=` только для `anthropic`/`openai`, у `webhook` его нет никогда. `trust_env=False` остаётся. При `IMPORT_ENABLED=false` — `EgressDisabled` до создания клиента.
+  - Тесты (`tests/security/test_no_egress.py`, +7; `tests/unit/test_settings.py`, +9): пусто → без прокси; задан → прокси у `anthropic` и `openai`, у `webhook` нет; флаг выключен → 0 соединений; запрос при заданном прокси даёт единственную попытку соединения — к `192.0.2.10:3128` (прокси), белый список хостов не изменился; стандартные `HTTPS_PROXY`/`ALL_PROXY` игнорируются; пароля прокси нет в журнале.
+- **T062** — `bm/provider_import/sources/anthropic.py` и общий `sources/_http.py`: пагинация, классы ошибок, `Decimal` из JSON. Тесты — `tests/integration/test_anthropic_source.py` (25), включая импорт через недоступный прокси: `failed/provider_unavailable`, пароля и ключа нет в журнале и дампе БД. Пометки `@T062` сняты в `test_us5_import.py` (4) и `test_secrets_not_leaked.py` (3); проверки не менялись.
+- **T063** — `bm/provider_import/sources/openai.py`. Тесты — `tests/integration/test_openai_source.py` (20). Пометка `@T063` в `test_us5_import.py` снята.
+- **T091** — `docs/integration-guide.md`: протокол, `http_status_hint`, коды отказов и 422/404 (В1-2, В1-4), эталонная схема 50 мс / fail-open / буфер, пример на `budget_client`, закрытие прямого доступа к провайдерам, `state_dir` (права, ПДн, ключа нет), «MCP в v1 не поставляется» (3К, 3Б9). Описание сверено с кодом сервера и клиента.
+
+### Допущения о форматах провайдеров (сверки со спайком не было)
+- **Anthropic `GET /v1/organizations/cost_report` — формат НЕ сверен** [Гипотеза]. В SDK `anthropic` 1.15/1.16 этого эндпоинта Admin API нет: там только beta `/v1/organizations/analytics/cost_report` (Enterprise, другой набор `group_by`). Из SDK подтверждаются только названия `starting_at`/`ending_at`/`bucket_width`/`page` и массив `group_by[]` со скобками [Факт]. Принято:
+  1. `amount` — десятичная строка **в центах**, ₽ = /100;
+  2. `currency = USD`, иначе `bad_response`;
+  3. модель — поле `model`, если нет — из `description` («Claude Opus 4.1 Usage - …» → `claude-opus-4-1`), иначе `cost_type`, иначе `unknown`;
+  4. `workspace_id = null` → источник `default`;
+  5. сутки — дата `starting_at` (UTC);
+  6. заголовок `anthropic-version: 2023-06-01`.
+
+  Ошибка в п. 1 даёт расход, завышенный или заниженный в 100 раз. Её нужно проверить на первом реальном ответе.
+- **OpenAI `GET /v1/organization/costs`** — параметры и структура ответа сверены с типами SDK `openai` 3.35.1: `UsageCostsParams`, `UsageCostsResponse`, `array_format="brackets"` → `group_by[]=…` [Факт]. Не сверено [Гипотеза]: модель = часть `line_item` до запятой (снапшот с датой, например `gpt-4o-2024-08-06`, не приводится к имени каталога); `project_id = null` → `default`; `amount = null` → строки нет.
+- Классы ошибок для обоих: 401/403 → `auth_rejected`; 408/429/5xx и сетевые ошибки, включая прокси, → `provider_unavailable`; прочие 4xx, не JSON, неверная структура, NaN, повторяющийся курсор, больше 1000 страниц → `bad_response`. Ключ не задан → `auth_rejected` без запроса. В тексте `ImportFailed` — только статус или класс исключения.
+
+### Команды
+```
+pytest tests/integration/test_provider_sources_audit.py   # до правки: 1 failed (at != Clock), после: 2 passed
+pytest tests/security/test_no_egress.py tests/unit/test_settings.py   # до: 13 failed; после: 51 passed (вместе с test_logging)
+pytest tests/integration/test_anthropic_source.py          # до: 25 x ModuleNotFoundError; после: 70 passed (с settings/egress)
+pytest tests/integration/test_openai_source.py tests/acceptance/test_us5_import.py   # до: 19 failed; после: 42 passed
+pytest tests/acceptance/test_us6_reports_roles.py          # 7 passed, 1 xfailed (SEED_DEFECT QA, 3Б5)
+
+DATABASE_URL=postgresql://bm:bm@127.0.0.1:5432/bm_test_b1 SKIP_FRONTEND=1 make test
+  1 failed, 720 passed, 1 xfailed in 211.20s
+  FAILED tests/deploy/test_compose_static.py::test_database_url_has_no_password   (файл DevOps, см. вопрос 1)
+make lint-imports → Contracts: 3 kept, 0 broken
+make lint → ruff check: 1 ошибка E501 в deploy/ci/check_licenses.py:158; ruff format: deploy/ci/check_licenses.py,
+            tests/deploy/test_compose_static.py — оба файла DevOps (в работе). Мои файлы: ruff check/format чистые.
+```
+
+### Отклонения
+1. `bm.egress.client` реэкспортирует `Client`, `Transport`, `TransportError` (псевдонимы httpx). Пакетам вне `egress` импорт httpx запрещён, а коннекторам нужны тип транспорта и класс сетевых ошибок. Контракт import-linter не менялся.
+2. Если передан тестовый `transport`, прокси не монтируется: httpx отправил бы запрос через смонтированный прокси мимо подмены. Наличие прокси проверяется на клиенте без транспорта.
+3. В `Settings` включён `hide_input_in_errors=True` для всех полей, а не только для прокси. Тексты ошибок старта остаются, значения не печатаются.
+4. T091 **не отмечена `[x]`**: её критерий — «техлид принял документ».
+
+### Вопросы техлиду
+1. **`make test` красный из-за теста DevOps, не из-за кода backend.** `tests/deploy/test_compose_static.py::test_database_url_has_no_password` запускает `docker compose config`, а `make test` экспортирует тестовый `DATABASE_URL` (Makefile, `export DATABASE_URL`). Compose подставляет его вместо значения по умолчанию. Без `DATABASE_URL` в окружении — 37/37 passed, с ним — 1 failed. DevOps: вызывать compose с очищенным окружением (`env -u DATABASE_URL` или `env=` в subprocess). Пока это не исправлено, `make test` красный у всех исполнителей.
+2. **Формат Anthropic `cost_report`** (единицы `amount`) — главный риск T062. Нужен один записанный ответ с реального ключа заказчика, после этого заменить синтетические фикстуры. Предлагаю внести это в чек-лист приёмки (T090/T089) как НЕ ПРОВЕРЕНО.
+3. Межмодульный интерфейс (3Б8): сигнатуры `bm.provider_import.catalog.create/update/delete` получили обязательный аргумент `now`. Вызывает их только роутер `provider_sources.py`, Backend 2 это не затрагивает.
+
+## 2026-10-21 — Backend 2: T073 (webhook-канал), первый шаг — время аудита по `Clock` (3Б7)
+
+**Итог:** T073 отмечена `[x]`. `SKIP_FRONTEND=1 make test` на `bm_test_b2`: **720 passed, 1 xfailed, 1 failed**. Упал только `tests/deploy/test_compose_static.py::test_database_url_has_no_password`. Это тест DevOps, к T073 он не относится: Backend 1 описал его выше, вопрос 1. Если запустить его без `DATABASE_URL` в окружении — 37/37 passed. `make lint`: import-linter 3/3 KEPT. ruff падает только на `deploy/ci/check_licenses.py:158` (E501, файл DevOps). По всем моим файлам `ruff check` и `ruff format --check` чистые.
+
+### Что сделано
+- **3Б7 — время аудита берётся из `Clock`:**
+  - `audit.write(..., at)` и `config.apply(..., at)` — аргумент `at` теперь обязательный, `coalesce(now())` убран. `DEFAULT now()` у колонки остался;
+  - `now` передаётся из `clock.now()` роутера: `departments` (create, update, limits), `admin_users` (create, update), `employees` (limits, `reveal_pseudonym`);
+  - `forbidden_access` (`bm/http/deps.py`) берёт время через `get_clock(request)`;
+  - вход в систему, импорт AD, справочник источников (Backend 1) и остальные справочники уже передавали `at`.
+- **T073 — webhook:**
+  - `bm/notify/service.py`: добавлена `configure(webhook_enabled=…)`. Её вызывают lifespan api и `worker.run` по `WEBHOOK_URL`; при выходе из lifespan значение сбрасывается в `disabled`. У `create_once` `webhook_status=None` означает «по настройке процесса», поэтому `subs_share`, `import_failure`, `import_unallocated` и остальные виды получают `pending`, и модули Backend 1 менять не пришлось. Пороги по-прежнему передают статус явно.
+  - `bm/notify/channels.py`:
+    - `Webhook` — клиент только через `egress("webhook")`;
+    - отправка — POST JSON с полями `id`, `kind`, `department_id`, `period`, `period_start`, `message`, `created_at` (время МСК, ISO 8601);
+    - 3 попытки с паузами 1 и 2 с, тайм-аут попытки 5 с; 2xx — `delivered`, иначе `failed`;
+    - `deliver_pending` за один такт берёт до 20 уведомлений `pending`; статус меняется только из `pending`.
+  - `bm/worker/jobs.py`: задача `webhook` раз в минуту, стоит последней в `default_jobs`. Если `WEBHOOK_URL` пуст, задачи нет.
+  - Если адрес не проходит `egress` (публичный IP), возникает `EgressForbidden`, его класс пишется в `job_run.error_class`. Уведомления остаются `pending`: после исправления адреса они будут доставлены. Соединений 0.
+- **Тесты** (сначала красные — вывод ниже):
+  - `tests/integration/test_audit_clock.py` (6): `config.apply` (подразделение, лимиты, пользователь админки), справочник источников, вход, `reveal_pseudonym`, `forbidden_access`, импорт AD — `at` равно `FrozenClock`, запись видна в `listAudit` за замороженный день; вызов без `at` даёт `TypeError`;
+  - `tests/integration/test_webhook.py` (9), получатель — локальный HTTP-сервер на 127.0.0.1:
+    - все 7 видов получают `pending`, после lifespan — снова `disabled`;
+    - доставка и формат тела; повторной отправки нет;
+    - 500/503/302 дают `failed` после 3 запросов;
+    - 500, 500, 204 дают `delivered`;
+    - получатель не слушает порт — `failed`;
+    - сквозной такт worker (порог → `webhook` → `delivered`) — в теле нет псевдонима, логина, ФИО и id сотрудника;
+    - публичный адрес — `EgressForbidden` и запись в `job_run`;
+  - `tests/integration/test_webhook_disabled.py` (2): `WEBHOOK_URL` пуст — у всех видов `disabled`, задачи `webhook` нет, 0 соединений;
+  - снят `xfail` `CLOCK_AUDIT` с `test_6_5_audit_records_who_when_before_after` (его поставил Backend 1 под 3Б7). В `test_reports.py::test_audit_lists_changes_with_before_after` интервал до 2099 заменён замороженным днём и точным `at`.
+
+### Команды и вывод (сокращённо)
+```
+# красная фаза
+pytest tests/integration/test_audit_clock.py            → 4 failed, 2 passed (источники и импорт AD уже передавали at)
+pytest tests/integration/test_webhook.py                → ERROR collecting: module 'bm.notify.channels' has no attribute 'Webhook'
+# зелёная
+pytest tests/integration/test_audit_clock.py            → 6 passed
+pytest tests/integration/test_webhook.py tests/integration/test_webhook_disabled.py → 11 passed
+# мутация: убран notify.configure в lifespan api       → test_webhook.py: 6 failed (возвращено)
+# готовность T073
+DATABASE_URL=…/bm_test_b2 SKIP_FRONTEND=1 make test     → 1 failed, 720 passed, 1 xfailed in 210s
+  FAILED tests/deploy/test_compose_static.py::test_database_url_has_no_password (DevOps, DATABASE_URL из окружения)
+env -u DATABASE_URL pytest tests/deploy/test_compose_static.py → 37 passed
+make lint → Contracts: 3 kept, 0 broken; ruff: E501 deploy/ci/check_licenses.py:158 (DevOps)
+```
+Оставшийся xfail — `test_6_2_csv_injection_is_neutralized` (дефект засева QA, 3Б5, T093).
+
+### Изменения в общих и чужих файлах (точечные)
+- `tests/acceptance/test_us6_reports_roles.py` (QA, правил Backend 1): удалён маркер `CLOCK_AUDIT` — так и предполагала его пометка «снимает Backend 2».
+- `tests/integration/test_snapshot.py`: в `apply` передаётся `at=AUDIT_AT`.
+- `bm/main.py`, `bm/worker/main.py`: вызов `notify.configure`.
+
+### Отклонения
+1. Статус по умолчанию для новых уведомлений — настройка процесса (`configure`), а не параметр, передаваемый по цепочке. Иначе пришлось бы менять `bm.budget.subs` и `bm.provider_import.pipeline` (модули Backend 1, сейчас в работе).
+2. Все 3 попытки делаются в одном такте, с паузами 1 и 2 с. Колонку для счётчика попыток и миграцию не добавлял. Худший случай для одного уведомления — около 18 с; за такт обрабатывается не больше 20 уведомлений.
+3. Ответ 3xx считается неудачей: редиректы `egress` не выполняет.
+
+### Для DevOps (T090, `docs/admin-guide.md`, раздел «Webhook»)
+Формат тела: `{"id","kind","department_id"|null,"period"|null,"period_start"|null,"message","created_at"}`, `Content-Type: application/json`, метод POST на `WEBHOOK_URL` (путь и query сохраняются). Успех — любой 2xx. Повторы: 3 попытки (паузы 1 и 2 с, тайм-аут 5 с), затем `failed`. Задача — раз в минуту. Публичный адрес — `job_run.error_class=EgressForbidden`, уведомления ждут в `pending`.
+
+### Вопросы техлиду
+1. `make test` красный у всех исполнителей из-за `test_compose_static.py` (DevOps), то же, что вопрос 1 Backend 1. Принимается ли готовность T073 с этим единственным посторонним падением?
+2. Пункт 2 «Отклонений»: устраивают ли повторы внутри такта, или нужны попытки в разных тактах (колонка `webhook_attempts`, миграция 0002)?

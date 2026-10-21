@@ -6,7 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Response
 
-from bm.http.deps import AdminSession, Conn
+from bm.http.deps import AdminSession, ClockDep, Conn
 from bm.http.schemas_admin import patch_of
 from bm.http.schemas_subs import ProviderSource, ProviderSourceCreate, ProviderSourceList, ProviderSourcePatch
 from bm.provider_import import catalog as service
@@ -22,21 +22,27 @@ async def list_provider_sources(session: AdminSession, conn: Conn) -> ProviderSo
 
 @router.post("", operation_id="createProviderSource", status_code=201)
 async def create_provider_source(
-    body: ProviderSourceCreate, session: AdminSession, conn: Conn
+    body: ProviderSourceCreate, session: AdminSession, conn: Conn, clock: ClockDep
 ) -> ProviderSource:
-    created = await service.create(conn, session.principal.login, body.model_dump())
+    created = await service.create(conn, session.principal.login, body.model_dump(), clock.now())
     return ProviderSource.model_validate(created)
 
 
 @router.patch("/{source_id}", operation_id="updateProviderSource")
 async def update_provider_source(
-    source_id: UUID, body: ProviderSourcePatch, session: AdminSession, conn: Conn
+    source_id: UUID,
+    body: ProviderSourcePatch,
+    session: AdminSession,
+    conn: Conn,
+    clock: ClockDep,
 ) -> ProviderSource:
-    updated = await service.update(conn, session.principal.login, source_id, patch_of(body))
+    updated = await service.update(conn, session.principal.login, source_id, patch_of(body), clock.now())
     return ProviderSource.model_validate(updated)
 
 
 @router.delete("/{source_id}", operation_id="deleteProviderSource", status_code=204)
-async def delete_provider_source(source_id: UUID, session: AdminSession, conn: Conn) -> Response:
-    await service.delete(conn, session.principal.login, source_id)
+async def delete_provider_source(
+    source_id: UUID, session: AdminSession, conn: Conn, clock: ClockDep
+) -> Response:
+    await service.delete(conn, session.principal.login, source_id, clock.now())
     return Response(status_code=204)

@@ -5,6 +5,7 @@
 """
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -82,7 +83,7 @@ async def get_department(conn: asyncpg.Connection, department_id: UUID) -> dict[
 
 
 async def create_department(
-    conn: asyncpg.Connection, actor: str, name: str, ad_group: str | None
+    conn: asyncpg.Connection, actor: str, name: str, ad_group: str | None, now: datetime
 ) -> dict[str, Any]:
     """Новое подразделение — в режиме «наблюдать» (policy_mode=observe, значение по умолчанию схемы БД)."""
 
@@ -96,13 +97,13 @@ async def create_department(
         after = await get_department(c, dep_id)
         return Applied(object_id=str(dep_id), after=after, result=after)
 
-    applied = await apply(conn, Change("create", "department", run), actor)
+    applied = await apply(conn, Change("create", "department", run), actor, at=now)
     result: dict[str, Any] = applied.result
     return result
 
 
 async def update_department(
-    conn: asyncpg.Connection, actor: str, department_id: UUID, patch: Mapping[str, Any]
+    conn: asyncpg.Connection, actor: str, department_id: UUID, patch: Mapping[str, Any], now: datetime
 ) -> dict[str, Any]:
     """`patch` — только переданные поля `DepartmentPatch`; `allowed_models` заменяет список целиком."""
 
@@ -133,13 +134,18 @@ async def update_department(
         after = await get_department(c, department_id)
         return Applied(object_id=str(department_id), before=before, after=after, result=after)
 
-    applied = await apply(conn, Change("update", "department", run), actor)
+    applied = await apply(conn, Change("update", "department", run), actor, at=now)
     result: dict[str, Any] = applied.result
     return result
 
 
 async def put_limits(
-    conn: asyncpg.Connection, actor: str, owner_type: str, owner_id: UUID, values: Mapping[str, int | None]
+    conn: asyncpg.Connection,
+    actor: str,
+    owner_type: str,
+    owner_id: UUID,
+    values: Mapping[str, int | None],
+    now: datetime,
 ) -> limits.LimitSet:
     """Лимиты подразделения или сотрудника; существование владельца проверяет вызывающий (`_lock`)."""
 
@@ -151,17 +157,21 @@ async def put_limits(
             object_id=str(owner_id), before={"limits": before}, after={"limits": after}, result=after
         )
 
-    applied = await apply(conn, Change("update_limits", owner_type, run), actor)
+    applied = await apply(conn, Change("update_limits", owner_type, run), actor, at=now)
     result: limits.LimitSet = applied.result
     return result
 
 
 async def put_department_limits(
-    conn: asyncpg.Connection, actor: str, department_id: UUID, values: Mapping[str, int | None]
+    conn: asyncpg.Connection,
+    actor: str,
+    department_id: UUID,
+    values: Mapping[str, int | None],
+    now: datetime,
 ) -> limits.LimitSet:
     async with conn.transaction():
         await _lock(conn, department_id)
-        return await put_limits(conn, actor, "department", department_id, values)
+        return await put_limits(conn, actor, "department", department_id, values, now)
 
 
 async def _lock(conn: asyncpg.Connection, department_id: UUID) -> None:

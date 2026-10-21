@@ -4,7 +4,10 @@
 с NULLS NOT DISTINCT. Поэтому для уведомлений без периода (сбой импорта, нет курса) вызывающий
 передаёт `period_start` — дату, на которую уведомление актуально, иначе оно придёт один раз навсегда.
 
-Оценка порогов (`evaluate`) и доставка во внешний канал (`deliver`) — T071 и T073.
+Внешний канал (T073): если в процессе задан `WEBHOOK_URL`, уведомления **всех** видов создаются с
+`webhook_status=pending` (14_tech_rulings.md, пакет 3), их доставляет задача worker `webhook`
+(`bm.notify.channels.deliver_pending`). Настройку процесса задаёт `configure` при старте api и worker:
+так источники уведомлений (пороги, подписки, импорт) не передают её по цепочке вызовов.
 """
 
 from dataclasses import dataclass
@@ -24,6 +27,19 @@ type NotificationKind = Literal[
     "reservation_no_report",
 ]
 type PeriodName = Literal["day", "week", "month"]
+type WebhookStatus = Literal["disabled", "pending"]
+
+_new_status: WebhookStatus = "disabled"
+
+
+def configure(*, webhook_enabled: bool) -> None:
+    """Статус внешнего канала у новых уведомлений процесса: `pending`, если задан `WEBHOOK_URL`."""
+    global _new_status  # настройка процесса: задаётся при старте api и worker
+    _new_status = "pending" if webhook_enabled else "disabled"
+
+
+def new_webhook_status() -> WebhookStatus:
+    return _new_status
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,11 +63,12 @@ async def create_once(
     period_start: date,
     message: str,
     *,
-    webhook_status: Literal["disabled", "pending"] = "disabled",
+    webhook_status: WebhookStatus | None = None,
 ) -> bool:
     """Создаёт уведомление, если по ключу его ещё нет. True — создано сейчас; False — уже было.
 
     Конкурентные вызовы безопасны: побеждает ровно один (ON CONFLICT по уникальному ограничению).
+    `webhook_status=None` — по настройке процесса (`configure`).
     `period_start` обязателен (14_tech_rulings.md Б5): у уведомлений без периода это дата МСК, когда
     обнаружено условие, иначе уведомление пришло бы один раз навсегда. `None` — ValueError.
     """
@@ -65,7 +82,7 @@ async def create_once(
         period,
         period_start,
         message,
-        webhook_status,
+        webhook_status or _new_status,
     )
     return created is not None
 

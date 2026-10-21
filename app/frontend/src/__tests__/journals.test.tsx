@@ -6,6 +6,9 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { DEP_ID, list, type Handler } from './support/contractApi';
 import { auditEntry, callEvent, department, department2, notification, NOTE_ID } from './support/fixtures';
 import { renderApp, resetApp } from './support/renderApp';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { AUDIT_DEFAULT_DAYS } from '../config/ui';
 
 const NN = ' ';
 
@@ -118,6 +121,14 @@ describe('11 Аудит', () => {
     fireEvent.change(screen.getByLabelText('Тип объекта'), { target: { value: 'department' } });
     await waitFor(() => expect(api.callsOf('listAudit').at(-1)!.query.object_type).toBe('department'));
     expect(api.violations).toEqual([]);
+  });
+
+  it('3Ф5: период аудита по умолчанию — 7 суток МСК, константа в общем модуле config/ui', () => {
+    expect(AUDIT_DEFAULT_DAYS).toBe(7);
+    const src = readFileSync(resolve(process.cwd(), 'src/resources/audit/index.tsx'), 'utf8');
+    expect(src).toMatch(/import \{[^}]*\bAUDIT_DEFAULT_DAYS\b[^}]*\} from '\.\.\/\.\.\/config\/ui'/);
+    // Своё число в экране не заводится: «-6» = «7 суток включая сегодня» должно считаться от константы.
+    expect(src).not.toMatch(/addDays\(today, -\d+\)/);
   });
 
   it('раскрытие строки — «Было / Стало», изменённый ключ подписан «изменено»', async () => {

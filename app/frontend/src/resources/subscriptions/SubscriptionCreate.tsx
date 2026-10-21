@@ -14,7 +14,9 @@ import {
   RadioGroup,
   TextField as MuiTextField,
 } from '@mui/material';
-import { Title, useDataProvider, useGetList, useNotify, useRedirect } from 'react-admin';
+import { useQuery } from '@tanstack/react-query';
+import { Title, useDataProvider, useNotify, useRedirect } from 'react-admin';
+import { fetchAllPages } from '../../api/allPages';
 import type { Schemas } from '../../api/types';
 import { can } from '../../access/permissions';
 import type { BmDataProvider } from '../../dataProvider';
@@ -148,11 +150,18 @@ function SubscriptionCreateForm() {
   };
   const text = (key: keyof FormState) => (e: { target: { value: string } }) => set(key, e.target.value as never);
 
-  const { data: employees, isPending: employeesPending } = useGetList<Schemas['Employee'] & { id: string }>(
-    'employees',
-    { filter: { department_id: form.employee_department }, pagination: { page: 1, perPage: 200 } },
-    { enabled: form.type === 'employee' && !!form.employee_department },
-  );
+  // Все сотрудники подразделения, страницами по 200 до total (3Ф2): иначе № 201 нельзя назначить.
+  const { data: employees, isPending: employeesPending } = useQuery({
+    queryKey: ['bm', 'listEmployees', 'all', form.employee_department],
+    queryFn: ({ signal }) =>
+      fetchAllPages<Schemas['Employee'] & { id: string }>(
+        dp,
+        'employees',
+        { department_id: form.employee_department },
+        signal,
+      ),
+    enabled: form.type === 'employee' && !!form.employee_department,
+  });
   const activeEmployees = (employees ?? []).filter((e) => e.active);
 
   const focusFirst = (errs: Errors) => {

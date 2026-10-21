@@ -7,7 +7,11 @@
 - `webhook` — только если WEBHOOK_URL задан и его хост — адрес из 10/8, 172.16/12, 192.168/16 или 127/8
   (имя хоста резолвится, все адреса должны быть частными); запросы — только на этот хост и порт;
 - редиректы не выполняются, переменные окружения прокси игнорируются (`trust_env=False`): иначе запрос
-  мог бы уйти на хост вне списка.
+  мог бы уйти на хост вне списка;
+- прокси импорта (14_tech_rulings.md, пакет 2, Б4): если задан IMPORT_HTTPS_PROXY, у клиентов `anthropic`
+  и `openai` — явный `proxy=` (туннель CONNECT к тем же двум хостам, белый список не меняется). К `webhook`
+  прокси не применяется никогда. При IMPORT_ENABLED=false клиент не создаётся — соединений нет, и с прокси
+  тоже.
 
 Ограничение: имя хоста webhook проверяется при создании клиента; повторный резолв при соединении
 (DNS rebinding) не контролируется — для v1 рекомендуем указывать в WEBHOOK_URL IP-адрес.
@@ -23,6 +27,12 @@ import httpx
 from bm.settings import Settings
 
 type Purpose = Literal["anthropic", "openai", "webhook"]
+
+# Типы httpx для коннекторов импорта: пакетам вне bm.egress импорт httpx запрещён (import-linter), поэтому
+# клиент, транспорт для тестов и класс сетевых ошибок они получают отсюда.
+Client = httpx.AsyncClient
+Transport = httpx.AsyncBaseTransport
+TransportError = httpx.TransportError
 
 PROVIDER_HOSTS: dict[str, str] = {"anthropic": "api.anthropic.com", "openai": "api.openai.com"}
 PRIVATE_NETWORKS = tuple(
@@ -79,12 +89,16 @@ def _host_guard(scheme_allowed: frozenset[str], host: str, port: int | None):  #
 def get_client(
     purpose: Purpose, settings: Settings, *, transport: httpx.AsyncBaseTransport | None = None
 ) -> httpx.AsyncClient:
-    """HTTP-клиент для цели `purpose`. `transport` — для тестов (httpx.MockTransport с фикстурами)."""
+    """HTTP-клиент для цели `purpose`. `transport` — для тестов (httpx.MockTransport с фикстурами): он
+    заменяет весь сетевой стек, поэтому прокси при нём не монтируется (иначе httpx ушёл бы мимо подмены)."""
+    proxy: str | None = None
     if purpose in PROVIDER_HOSTS:
         if not settings.import_enabled:
             raise EgressDisabled("импорт расхода провайдеров выключен (IMPORT_ENABLED=false)")
         hook = _host_guard(frozenset({"https"}), PROVIDER_HOSTS[purpose], None)
         base_url = f"https://{PROVIDER_HOSTS[purpose]}"
+        if settings.import_https_proxy is not None and transport is None:
+            proxy = settings.import_https_proxy.get_secret_value().strip()
     elif purpose == "webhook":
         if not settings.webhook_url:
             raise EgressDisabled("внешний канал уведомлений выключен (WEBHOOK_URL пуст)")
@@ -104,6 +118,7 @@ def get_client(
     return httpx.AsyncClient(
         base_url=base_url,
         transport=transport,
+        proxy=proxy,
         trust_env=False,
         follow_redirects=False,
         timeout=DEFAULT_TIMEOUT,

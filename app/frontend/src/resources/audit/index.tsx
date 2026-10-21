@@ -6,6 +6,7 @@ import { Datagrid, FunctionField, List, Pagination, useRecordContext } from 'rea
 import { can } from '../../access/permissions';
 import type { Schemas } from '../../api/types';
 import { EmptyState, Forbidden, ListError, ListSlowHint, Mono, useRole } from '../../components/common';
+import { AUDIT_DEFAULT_DAYS } from '../../config/ui';
 import { addDays, formatDateTimeMsk, todayMsk } from '../../format/date';
 import { ru } from '../../i18n/ru';
 import { JournalTabs, PeriodFilter, useSetFilter, type FilterSetter } from '../events';
@@ -117,8 +118,8 @@ export function AuditPage() {
         error={<ListError />}
         title={t.title}
         disableSyncWithLocation
-        // Период по умолчанию — последние 7 суток по МСК (в screens.md §11 значение не задано).
-        filterDefaultValues={{ from: addDays(today, -6), to: today }}
+        // Период по умолчанию — последние AUDIT_DEFAULT_DAYS суток по МСК, включая сегодня (3Ф5).
+        filterDefaultValues={{ from: addDays(today, 1 - AUDIT_DEFAULT_DAYS), to: today }}
         pagination={<Pagination rowsPerPageOptions={[50, 100, 200]} />}
       >
         <ListSlowHint />

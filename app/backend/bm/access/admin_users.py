@@ -9,6 +9,7 @@
 """
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -50,7 +51,14 @@ async def _check_department(conn: asyncpg.Connection, role: str, department_id: 
 
 
 async def create_user(
-    conn: asyncpg.Connection, actor: str, *, login: str, password: str, role: str, department_id: UUID | None
+    conn: asyncpg.Connection,
+    actor: str,
+    *,
+    login: str,
+    password: str,
+    role: str,
+    department_id: UUID | None,
+    now: datetime,
 ) -> dict[str, Any]:
     password_hash = hash_password(password)  # argon2 — вне транзакции
 
@@ -69,13 +77,13 @@ async def create_user(
         after = _out(row)
         return Applied(object_id=after["id"], after=after, result=after)
 
-    applied = await apply(conn, Change("create", "admin_user", run), actor)
+    applied = await apply(conn, Change("create", "admin_user", run), actor, at=now)
     result: dict[str, Any] = applied.result
     return result
 
 
 async def update_user(
-    conn: asyncpg.Connection, actor: str, user_id: UUID, patch: Mapping[str, Any]
+    conn: asyncpg.Connection, actor: str, user_id: UUID, patch: Mapping[str, Any], now: datetime
 ) -> dict[str, Any]:
     """`patch` — только переданные поля `AdminUserPatch` (role, department_id, active, reset_password)."""
     new_hash = hash_password(patch["reset_password"]) if patch.get("reset_password") else None
@@ -121,6 +129,6 @@ async def update_user(
         audit_after = {**after, "password_reset": True} if new_hash is not None else after
         return Applied(object_id=str(user_id), before=before, after=audit_after, result=after)
 
-    applied = await apply(conn, Change("update", "admin_user", run), actor)
+    applied = await apply(conn, Change("update", "admin_user", run), actor, at=now)
     result: dict[str, Any] = applied.result
     return result

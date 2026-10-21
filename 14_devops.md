@@ -7,7 +7,10 @@
 | ID | Задача | Статус | Доказательство |
 |---|---|---|---|
 | T001 | Каркас репозитория и команд | **Готово** в рамках среды: `make test` и `make test-unit` дают exit 0 без Docker. Docker-цели написаны, но не запускались: Docker Hub недоступен | Вывод ниже |
-| T088 | SDL-проверки | **Частично**. Python-часть (SBOM, лицензии, pip-audit, import-linter) работает, `make check` дал exit 0. npm-ветка проверена на пробном проекте вне репозитория. Trivy не проверен, `egress-host-check` не запускался | Вывод ниже |
+| T088 | SDL-проверки | **Готово (2026-10-21)**, Trivy — НЕ ПРОВЕРЕНО (только CI) | Раздел «2026-10-21» ниже |
+| T087 | Полная поставка | **Проверено локально** (`[ ]` до журнала CI) | Раздел «2026-10-21» ниже |
+| T092 | CI GitHub Actions | **Написан, синтаксис проверен** (`[ ]` до журнала CI) | Раздел «2026-10-21» ниже |
+| T090 | Руководство администратора | **Готово к приёмке** (`[ ]` до приёмки техлидом и прогона QA) | `docs/admin-guide.md` |
 
 Оговорка: T088 зависит только от T001, поэтому сделан сразу. npm-часть заработает на реальном фронтенде после T002, Trivy — после T087 (образ) и установки trivy.
 
@@ -216,3 +219,183 @@ make check: OK                                                 exit=0
 3. **CI (`.github/workflows/ci.yml`)** в T001 и T088 не входит, и ни одной задачи с ним в `12_tasks.md` нет. Версии GitHub Actions проверить из сессии не удалось: API GitHub закрыт. Предлагаю отдельную задачу для DevOps: `make lint`, `make test` (service `postgres:18`), `CHECK_STRICT=1 make check`, gitleaks, SBOM как артефакт.
 4. **Для T015:** добавить `bm.main` и `bm.settings` в контракт `egress-only`; не использовать extra `openapi-core[fastapi]` (несовместим с fastapi 0.143.0).
 5. **Для T014:** DDL должен работать на PostgreSQL 16 (локальный стенд) и на 18 (поставка), либо локальный стенд нужно обновить.
+
+
+---
+
+## 2026-10-21 — T087, T092, T088, T090 (пакет 3, 3Д1–3Д4)
+
+Среда: Docker 29.8.2 / Compose 5.5.1, демон запущен, все реестры отвечают 403. PostgreSQL 16.15. Node 22.22.0.
+
+### Итог
+
+| ID | Отметка | Статус гейтов (3Д2) |
+|---|---|---|
+| T087 | `[ ]`, проверено локально | статика compose — **PASS**; `up/smoke/backup/restore/smoke` — **PASS-замена** (стек из локальных процессов); сборка образа и стек в Docker — **НЕ ПРОВЕРЕНО** (реестры 403, проверка — CI T092 или чек-лист admin-guide §14) |
+| T092 | `[ ]` | workflow написан, `actionlint` 0 ошибок; **прогона нет** — журнала CI нет, все его пункты НЕ ПРОВЕРЕНО |
+| T088 | **`[x]`** | SBOM Python/npm, лицензии, pip-audit, npm audit, import-linter — **PASS**; Trivy — **НЕ ПРОВЕРЕНО** (нет бинарника и образа; шаг выполняется в CI) |
+| T090 | `[ ]` | документ готов; ждёт приёмки техлида и прогона QA на чистой машине |
+
+`make test` (полный, БД `bm_test_devops` на общем кластере 5432): **721 passed, 1 xfailed; frontend 28 файлов / 363 теста passed; exit 0.**
+
+### Что сделано (файлы)
+
+| Файл | Что |
+|---|---|
+| `deploy/docker-compose.yml` | `api`, `worker`, `postgres:18` (`bm`/`bm`), `backup`. Сеть `core` с `internal: true` (в ней `postgres`, `backup`), `edge` (у `api`, `worker`). Порт `"${BIND_ADDR}:${API_PORT}:8080"`. Healthcheck и `restart: unless-stopped` у всех сервисов. Секреты — compose `secrets` с источником `environment`: значения из `deploy/.env` попадают в контейнер файлами `/run/secrets/*` и читаются через `*_FILE`. Принцип наименьших прав: ключи провайдеров есть только у `worker`, пароль первого администратора — только у `api`. `DATABASE_URL` без пароля. `PROMETHEUS_MULTIPROC_DIR=/run/bm-metrics` на tmpfs (uid 10001), только у `api`. `IMPORT_HTTPS_PROXY` — только у `worker` (импорт выполняет он; `runImport` в `api` ставит задачу в очередь) |
+| `deploy/Dockerfile` | Стадия `node-build` (`npm ci` + `npm run build` + check-dist, `design/tokens.json`) → `COPY dist /app/static/admin`. Добавлены entrypoint и `healthcheck.py`. `UV_EXTRAS` и `--all-extras` убраны |
+| `deploy/docker-entrypoint.sh` | Снимает `*_FILE`, если файла нет. Пустой секрет compose файлом не создаёт [Факт: проверено на образе-заглушке, см. ниже]. Пароль БД из `POSTGRES_PASSWORD_FILE` передаёт в `PGPASSWORD` (asyncpg берёт его, если в DSN нет пароля [Факт: asyncpg 0.32 `connect_utils.py`]). Очищает каталог метрик при старте |
+| `deploy/healthcheck.py` | `api`: `/readyz`. `worker`: PID 1 — это `bm.worker`, и `SELECT 1` к БД |
+| `deploy/backup/{backup.sh,restore.sh}` | `pg_dump -Fc` во временный файл, проверка `pg_restore --list`, ротация `BACKUP_KEEP`, `--loop` (раз в сутки), `--healthcheck` (копия не старше 26 ч). Восстановление — в чистую БД: `DROP DATABASE … WITH (FORCE)` → `CREATE` → `pg_restore --exit-on-error` |
+| `deploy/local/stack.sh` | Стек из локальных процессов: свой кластер PG (initdb, порт 55432, только TCP 127.0.0.1, `bm`/`bm`, данные в `deploy/local/.state/` в `.gitignore`), `api` (uvicorn, 2 воркера, порт 18080), `worker`. Pid-файлы, каждый сервис в своей сессии (pid = pgid). `stop` = сигнал остановки (у postgres SIGINT, как STOPSIGNAL официального образа [Вывод]; у api/worker SIGTERM) → до 10 с → SIGKILL группы. `kill` = SIGKILL группы. Команды `up/down/destroy/status/start/stop/kill/wait/env/backup/restore/logs`. Порт 5432 запрещён явно |
+| `Makefile` | `up-local`, `down-local`, `backup`, `restore` (compose и `BM_STACK=local`), `compose-check`. `smoke` и `failover` при `BM_STACK=local` берут переменные из `stack.sh env`. `lint`/`fmt` по `app/backend app/client tests deploy` (3Б9). `--all-extras` убран. Compose вызывается через `env -u DATABASE_URL`: экспорт тестового `DATABASE_URL` из Makefile иначе подменял бы `DATABASE_URL` стека (дефект найден тестом, см. ниже). `load e2e` переставлены в `e2e load`: строка, начинающаяся с `load`, — директива GNU make |
+| `deploy/.env.example` | `SESSION_COOKIE_SECURE=false` и `IMPORT_HTTPS_PROXY=` с комментариями по Б2/Б4. Описано, как передаются секреты. `DATABASE_URL` без пароля. Пары `*_ADMIN_KEY_FILE` убраны (в compose это файлы `/run/secrets`). `BM_ADMIN_PASSWORD` — только для smoke и failover |
+| `app/backend/pyproject.toml`, `uv.lock` | Extra `mcp` удалён (3К): из lock ушли 10 пакетов (mcp, mcp-types, httpx2, httpcore2, httpx2-jsfetch, sse-starlette, pyjwt, cryptography, truststore, pywin32). **certifi 2026.7.22 → 2026.10.19** — см. отклонение 1 |
+| `tests/smoke/{conftest.py,test_smoke.py}` | healthz, readyz, metrics; ключевой сценарий: вход (при первом входе — смена временного пароля на `BM_ADMIN_PASSWORD`) → модель, подразделение, лимит, ключ → `allow` → отчёт 100,00 ₽ → остаток уменьшился ровно на сумму отчёта. `compose_only`: SPA `/admin/`, все 4 сервиса healthy, uid 10001, каталог метрик только у `api`, порт `postgres` не опубликован. Без `BM_SMOKE=1` тесты пропускаются; с ним при отсутствии стека — падают |
+| `tests/deploy/test_compose_static.py` | Статические требования 3Д1(а) по `docker compose config --format json`, `.env.example`, Dockerfile, удалению MCP. Входит в `make test`. `BM_REQUIRE_COMPOSE=1` (CI) запрещает пропуск |
+| `tests/deploy/test_check_licenses.py`, `deploy/ci/check_licenses.py`, `licenses-exceptions.txt` | Исключения только вида `<тип>:<имя>@<версия>` (3Д3). Запись без версии — exit 2. На копилефт исключения не действуют. Исключения: `pypi:certifi@2026.10.19`, `unknown:budget-client@0.1.0` (собственный клиент без purl) |
+| `deploy/ci/check.sh` | Окружение поставки без extras плюс `budget_client` (3Б9). Команда Trivy задаётся через `TRIVY` (в CI — контейнер). Строка лицензии `@tanstack/react-query` из npm-SBOM (3Ф3) |
+| `.github/workflows/ci.yml` | Задача `test`: сервис `postgres:18`, `make lint`, `make compose-check`, `make test`, фронтенд в `node:24-slim`. Задача `delivery`: `make build`, digest базовых образов, `make up && make smoke && make backup && make restore && make smoke`, `make failover`, `CHECK_STRICT=1 make check` с Trivy в контейнере, попытка `sudo make egress-host-check` (`continue-on-error`), журналы стека. Сторонний action — только `actions/checkout@v5`. Секретов нет: пароли стенда генерируются в прогоне |
+| `docs/admin-guide.md` | Установка за ≤ 30 мин, переменные, секреты, HTTPS и `SESSION_COOKIE_SECURE`, сессия 12 ч, режимы и локальный акт перед `enforce`, правила денег, импорт и ключи, раздел «Импорт через корпоративный прокси», раздел «Webhook» (формат тела, повторы, статусы, IP вместо имени), резервные копии, закрытый контур, чек-лист «Проверка поставки на своём стенде» (§14), неполадки |
+
+### Команды готовности и вывод
+
+**T087, статика (3Д1(а)) — PASS**
+```
+$ docker compose -f deploy/docker-compose.yml --env-file deploy/.env.example config --quiet   → exit 0
+$ docker compose -f deploy/docker-compose.test.yml config --quiet                             → exit 0
+$ make compose-check
+tests/deploy/test_compose_static.py::test_core_network_is_internal PASSED
+tests/deploy/test_compose_static.py::test_db_and_backup_only_in_core[postgres|backup] PASSED
+tests/deploy/test_compose_static.py::test_api_port_from_bind_addr_and_api_port PASSED
+tests/deploy/test_compose_static.py::test_healthcheck_and_restart[api|backup|postgres|worker] PASSED
+tests/deploy/test_compose_static.py::test_secret_values_never_in_rendered_config PASSED
+tests/deploy/test_compose_static.py::test_prometheus_multiproc_dir_on_tmpfs_only_at_api PASSED
+tests/deploy/test_compose_static.py::test_import_https_proxy_passed_to_worker PASSED
+... ============================== 48 passed in 0.85s ==============================   EXIT 0
+```
+Отрицательные проверки (мутации compose-файла, по одной):
+```
+internal: true → false                       1 failed, 36 passed
+tmpfs каталога метрик убран                  1 failed, 36 passed
+IMPORT_HTTPS_PROXY у worker убран            1 failed, 36 passed
+restart: unless-stopped → always             4 failed, 33 passed
+postgres/backup добавлены в edge             2 failed, 35 passed
+DATABASE_URL тестовой БД в окружении         test_database_url_has_no_password FAILED → найден дефект (compose
+                                             берёт окружение раньше --env-file); исправлено в Makefile и тесте
+```
+
+**T087, стек из локальных процессов (3Д1(в)) — PASS-замена**
+```
+$ make up-local && make smoke BM_STACK=local && make backup BM_STACK=local && make restore BM_STACK=local && make smoke BM_STACK=local
+stack.sh: postgres: 127.0.0.1:55432 (pid 14265)
+stack.sh: готов: http://127.0.0.1:18080/readyz
+========================= 4 passed, 6 skipped in 1.06s =========================
+2026-10-21T05:37:37Z backup: OK .../deploy/local/.state/backups/bm-20261021T053737Z.dump (74432 байт)
+2026-10-21T05:37:41Z restore: БД bm пересоздана (чистая)
+2026-10-21T05:37:41Z restore: OK: восстановлено в bm, таблиц в public: 29
+stack.sh: готов: http://127.0.0.1:18080/readyz
+========================= 4 passed, 6 skipped in 1.05s =========================
+CHAIN_EXIT=0
+```
+6 skipped — проверки `compose_only` (SPA из образа, healthy, uid ×2, каталог метрик, порт postgres), причина печатается в отчёте pytest.
+Восстановление действительно возвращает состояние копии: после копии у 3 моделей `active=false` → после `make restore` `inactive=0`, `models=3`.
+Сигналы (для драйвера T093):
+```
+api pgid 13316: 4 процессов → stack.sh kill api → 0 процессов; status: api stopped
+stack.sh stop api       → 2,6 с, 0 процессов группы
+stack.sh stop postgres  → 2,2 с; /readyz → {"status":"fail","db":"fail"}; start postgres → /readyz ok (api пережил перезапуск БД)
+```
+Чем замена отличается от compose: нет образа (SPA, uid 10001, HEALTHCHECK), нет сетей compose, PostgreSQL 16 вместо 18, процессы запущены от root (postgres — от пользователя postgres). Общий кластер 5432 не останавливался.
+
+**T087, Docker — НЕ ПРОВЕРЕНО**
+```
+$ docker build --check -f deploy/Dockerfile .
+ERROR: node:24-slim: failed to resolve source metadata ... registry-1.docker.io ...: Forbidden
+```
+Что удалось проверить без реестра:
+- `docker build --check` с базовыми образами, подменёнными локальной заглушкой (`--build-arg PYTHON_IMAGE=… NODE_IMAGE=…`): `Check complete, no warnings found.` — синтаксис и линт Dockerfile в порядке, сборка не выполнялась;
+- образ-заглушка (`docker import` из bash и libc хоста) и compose-файл с теми же конструкциями:
+```
+uid=10001 gid=10001
+drwx------ 2 10001 10001 /run/bm-metrics           ← tmpfs с uid/gid работает
+-r--r--r-- 1 0 0 6 s   S=[abc123]                  ← secrets.environment берёт значение из --env-file, файл 0444
+E=[cat: /run/secrets/e: No such file or directory]  ← пустая переменная → файл не создаётся (обработано в entrypoint)
+tmpfs-writable
+```
+- entrypoint на хосте: `*_FILE` без файла снимаются, `PGPASSWORD` выставлен, каталог метрик очищен; `healthcheck.py` (`_db_ok`) с `POSTGRES_PASSWORD_FILE` → `True`.
+
+**T088 — `CHECK_STRICT=1 make check` на текущем дереве (с npm-веткой по `app/frontend`)**
+```
+=== Python: лицензии ===
+deploy/ci/out/sbom-python.cdx.json: компонентов 28, нарушений 0
+Исключения (deploy/ci/licenses-exceptions.txt): pypi:certifi@2026.10.19, unknown:budget-client@0.1.0
+=== Python: уязвимости (pip-audit) ===
+No known vulnerabilities found / pip-audit: пакетов 27, уязвимостей 0
+deploy/ci/out/sbom-npm.cdx.json: компонентов 138, нарушений 0
+npm SBOM: @tanstack/react-query@5.104.2 — MIT
+7 moderate severity vulnerabilities  (decode-uri-component ← query-string ← ra-core; порог — critical)
+=== Итог make check ===
+OK    python: uv sync --frozen (lock-файл согласован)
+OK    python: budget_client в окружении поставки (для SBOM)
+OK    python: SBOM deploy/ci/out/sbom-python.cdx.json
+OK    python: лицензии по белому списку
+OK    python: pip-audit — известных уязвимостей нет
+OK    python: import-linter
+OK    npm: нет @react-admin/ra-*
+OK    npm: SBOM deploy/ci/out/sbom-npm.cdx.json
+OK    npm: лицензии по белому списку
+OK    npm: audit — критичных уязвимостей нет
+FAIL  trivy: не установлен (в CI — контейнер Trivy, T092) (пропуск запрещён: CHECK_STRICT=1)
+make check: FAIL                                                     STRICT_EXIT=2
+$ make check   →  SKIP trivy … / make check: OK (SBOM и отчёты — deploy/ci/out/)   EXIT 0
+```
+В строгом режиме единственный FAIL — Trivy: здесь он НЕ ПРОВЕРЕНО, по 3Т это допускается. SBOM лежат в `deploy/ci/out/`. В SBOM есть `budget-client`, `mcp*` нет (0 совпадений). Ветка Trivy проверена заглушкой команды (`TRIVY=<скрипт>`, `IMAGE=<образ-заглушка>`): при 0 critical — `OK … make check: OK`, exit 0; при critical — `FAIL trivy: есть critical`, exit 1. Сам Trivy при этом не запускался.
+Проверки лицензий (`tests/deploy/test_check_licenses.py`, 11 passed): MIT-0 разрешён; MPL-2.0 без исключения — FAIL; исключение `certifi@<версия из uv.lock>` действует только на эту версию; запись без версии — exit 2; GPL/AGPL/LGPL/SSPL — FAIL даже при записи в исключениях (мутация «исключение без проверки копилефта» → 4 failed); `@react-admin/ra-*` — ENTERPRISE.
+
+**T092 — синтаксис workflow (actionlint есть: `actionlint-py` 1.7.12 с PyPI, вместе с shellcheck 0.11.0)**
+```
+$ actionlint -verbose .github/workflows/ci.yml
+verbose: Found 0 parse errors in 0 ms for .github/workflows/ci.yml
+verbose: Found total 0 errors in 329 ms for .github/workflows/ci.yml        rc=0
+$ actionlint ci-bad.yml   (runs-on → runs_on, незакрытая кавычка в run:)
+… "runs-on" section is missing in job "test" [syntax-check]
+… shellcheck reported issue in this script: SC1072:error … [shellcheck]
+$ shellcheck -S warning deploy/local/stack.sh deploy/backup/*.sh deploy/docker-entrypoint.sh deploy/ci/*.sh deploy/run-tests.sh   rc=0
+```
+Прогона CI нет: репозиторий из сессии недоступен (API GitHub — 403). Журнала нет, поэтому все пункты CI — **НЕ ПРОВЕРЕНО**.
+
+**Полный `make test` и `make lint`**
+```
+$ DATABASE_URL=postgresql://bm:bm@127.0.0.1:5432/bm_test_devops make test
+БД доступна: PostgreSQL 16.15 …
+================== 721 passed, 1 xfailed in 213.75s (0:03:33) ==================
+Contracts: 3 kept, 0 broken.
+ Test Files  28 passed (28)
+      Tests  363 passed (363)
+run-tests.sh full: OK                                                EXIT=0
+$ make lint   → Contracts: 3 kept, 0 broken. / All checks passed! / 161 files already formatted   EXIT 0
+```
+1 xfail — `test_6_2_csv_injection_is_neutralized` (QA, 3Б5, T093). Прогон шёл на отдельной БД `bm_test_devops`, которую я создал на общем кластере (сам кластер не останавливался), чтобы не мешать параллельным прогонам на `bm_test`. Первый прогон завис на `test_us4_subscriptions` во время перезапуска общего кластера и был снят. Повтор — зелёный.
+
+### Отклонения
+
+1. **certifi поднят до 2026.10.19 (транзитивная зависимость, только `uv.lock`).** `pip-audit` нашёл в 2026.7.22 уязвимость PYSEC-2026-4320 / GHSA-6q48-6c7w-9gw2 (скомпрометированные промежуточные CA emSign, возможен MITM). Под удар попадает TLS импорта к провайдерам. Без обновления `make check` падает. Лицензия та же, MPL-2.0. Узкое исключение (3Д3) перенесено на новую версию. **Нужно подтверждение техлида** (вопрос 1).
+2. **Артефакты CI без `actions/upload-artifact`.** По 3Д4 разрешён только checkout. Сводка `make check` и SBOM (gzip+base64, с sha256) печатаются в журнал прогона, а SBOM восстанавливается из журнала. Если техлид разрешит официальный `actions/upload-artifact`, это одна строка (вопрос 3).
+3. **Версии в CI не проверены** [Гипотеза]: `actions/checkout@v5`, `aquasec/trivy:0.58.0`, `node:24-slim`. Реестры и API GitHub закрыты. Digest базовых образов печатает шаг CI, после первого прогона их нужно закрепить в Dockerfile.
+4. **`make smoke` при первом входе меняет временный пароль** на `BM_ADMIN_PASSWORD`. Без этого ключевой сценарий smoke на чистой установке не пройти: API требует смены пароля. Это описано в admin-guide и в `.env.example`.
+5. **Контейнер `backup` работает от root.** Том `/backups` создаётся с владельцем root. Контейнер только в `core` (internal), портов нет. Переход на `gosu postgres` — после проверки в CI.
+6. **`IMPORT_HTTPS_PROXY` передаётся через окружение `worker`**, а логин и пароль прокси в URL видны в `docker inspect`. Варианта `*_FILE` для этой переменной в `Settings` нет (вопрос 4).
+
+### Нужны правки в коде (не моя зона)
+
+1. **Backend: раздача SPA.** Образ кладёт `dist` в `/app/static/admin`, но `bm.main` статику не отдаёт: `GET /admin/` на локальном стеке → **404** (проверено). `compose_only`-тест `test_admin_spa_served_from_image` в CI упадёт, и это правильно: гейт не должен быть зелёным без админки. Предложение: `StaticFiles(directory="/app/static/admin", html=True)` на `/admin`, если каталог есть. Путь можно вынести в константу или переменную; в compose это всегда `/app/static/admin`.
+2. **Backend (T062): `IMPORT_HTTPS_PROXY`** в `Settings` и `bm.egress` пока не реализован: переменная есть только в списке маскирования журналов. Поставка её уже передаёт `worker`.
+
+### Вопросы техлиду
+
+1. Подтвердить обновление certifi до 2026.10.19 и перенос узкого исключения на эту версию (отклонение 1).
+2. T087 и T092 остаются `[ ]`, пока нет журнала CI. Кто и когда запускает CI на репозитории проекта (нужен push `.github/workflows/ci.yml` и раннер с доступом к Docker Hub)? До этого в `16_release.md` уходят как НЕ ПРОВЕРЕНО: сборка образа, стек в Docker, Trivy, `egress-host-check`, PG 18, SC-009.
+3. Разрешить ли `actions/upload-artifact` для SBOM (отклонение 2)?
+4. Нужен ли `IMPORT_HTTPS_PROXY_FILE` (backend, `Settings`), чтобы учётные данные прокси не лежали в окружении контейнера?
+5. Можно заранее, до CI, проверить compose-стек целиком на образах, собранных из файлов хоста (`docker import`; так уже проверены secrets и tmpfs). Статус будет PASS-замена, не PASS, работы примерно на 0,5 дня. Делать?

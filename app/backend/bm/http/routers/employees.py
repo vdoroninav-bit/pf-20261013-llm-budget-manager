@@ -8,7 +8,7 @@ from fastapi import APIRouter, Path, Request
 
 from bm.access.authorize import Scope, department_filter
 from bm.config import employees as service
-from bm.http.deps import AdminSession, Conn, authorize_object
+from bm.http.deps import AdminSession, ClockDep, Conn, authorize_object
 from bm.http.routers._common import Page, PageSize
 from bm.http.routers.departments import limits_kop
 from bm.http.schemas_admin import Employee, EmployeeIdentity, EmployeeList, LimitSet, LimitSetOut
@@ -52,14 +52,18 @@ async def get_employee(
 
 @router.put("/employees/{pseudonym}/limits", operation_id="putEmployeeLimits")
 async def put_employee_limits(
-    body: LimitSet, session: AdminSession, conn: Conn, pseudonym: str = PseudonymPath
+    body: LimitSet, session: AdminSession, conn: Conn, clock: ClockDep, pseudonym: str = PseudonymPath
 ) -> LimitSetOut:
-    saved = await service.put_employee_limits(conn, session.principal.login, pseudonym, limits_kop(body))
+    saved = await service.put_employee_limits(
+        conn, session.principal.login, pseudonym, limits_kop(body), clock.now()
+    )
     return LimitSetOut.model_validate(saved)
 
 
 @router.get("/pseudonyms/{pseudonym}", operation_id="revealPseudonym")
 async def reveal_pseudonym(
-    session: AdminSession, conn: Conn, pseudonym: str = PseudonymPath
+    session: AdminSession, conn: Conn, clock: ClockDep, pseudonym: str = PseudonymPath
 ) -> EmployeeIdentity:
-    return EmployeeIdentity.model_validate(await service.reveal(conn, session.principal.login, pseudonym))
+    return EmployeeIdentity.model_validate(
+        await service.reveal(conn, session.principal.login, pseudonym, clock.now())
+    )

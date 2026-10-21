@@ -353,9 +353,9 @@ async def test_audit_lists_changes_with_before_after(
     created = await client.post("/api/v1/departments", json={"name": "Маркетинг"}, headers=csrf)
     dep = created.json()["id"]
     await client.patch(f"/api/v1/departments/{dep}", json={"policy_mode": "warn"}, headers=csrf)
-    # config.apply пишет аудит временем БД (now()), а не замороженными часами теста — берём широкий интервал
+    # время аудита — по часам приложения (пакет 3, 3Б7): записи видны за замороженный день
     resp = await client.get(
-        "/api/v1/audit", params={"from": "2026-10-14", "to": "2099-12-31", "object_type": "department"}
+        "/api/v1/audit", params={"from": "2026-10-14", "to": "2026-10-14", "object_type": "department"}
     )
     assert resp.status_code == 200, resp.text
     assert_matches_contract(resp, "listAudit")
@@ -363,7 +363,7 @@ async def test_audit_lists_changes_with_before_after(
     assert [e["object_id"] for e in items] == [dep, dep]
     upd = items[0]  # новые сверху
     assert upd["before"]["policy_mode"] == "observe" and upd["after"]["policy_mode"] == "warn"
-    assert upd["actor"] == "root" and upd["at"] >= "2026-10-14"
+    assert upd["actor"] == "root" and datetime.fromisoformat(upd["at"]) == msk(2026, 10, 14, 12)
     other_day = await client.get("/api/v1/audit", params={"from": "2026-10-13", "to": "2026-10-13"})
     assert other_day.json()["total"] == 0
     async with session_as(client, seed, "fin", role="finance_viewer") as (fin, _):
