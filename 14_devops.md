@@ -617,6 +617,44 @@ $ uvx --with shellcheck-py --with pyflakes --from actionlint-py actionlint -verb
 - notice «Trivy: CRITICAL и путь certifi»: `bm:local: CRITICAL 0`, `certifi 2026.10.19 Target=Python FilePath=app/.venv/…` (одна установка); по базовому образу — `certifi 2026.6.17 … FilePath=usr/local/lib/python3.13/site-packages/pip/…` или «certifi: не найден» (тогда источник подтверждается только исчезновением находки — разберу по факту).
 - notice digest: теги совпадают с закреплёнными или видно смещение; `make test` на `postgres:18@sha256:1267…`, frontend на `node@sha256:55fb…` — PASS; smoke/failover с `python -m bm.serve` — PASS.
 
+### Разбор CI `92b3414`: certifi 2026.6.17 с FilePath=- — источник SBOM pip, а не колесо
+
+Данные (со слов оркестратора): `make build` PASS (проверки pip/certifi в `RUN` прошли), Trivy: `bm:local` CRITICAL 1 — certifi 2026.6.17, `Target=Python`, `FilePath=-`; в базовом `python:3.13-slim` то же; certifi 2026.10.19 — в `app/.venv`. npm — только `WARN`.
+
+| Проверка | Результат |
+|---|---|
+| Гипотеза «вложенный .whl» | **Не подтверждается** [Факт по исходникам Trivy v0.58.0]: python-анализатор (`pkg/fanal/analyzer/language/python/packaging/packaging.go`) берёт только `*.dist-info/METADATA` и egg (`EGG-INFO/PKG-INFO`, `.egg-info`, `.egg`); wheel не распаковывает |
+| Что ещё есть в pip | `pip-26.2.1-py3-none-any.whl` содержит `pip/_vendor/bom.cdx.json` (CycloneDX 1.4) с компонентом `certifi 2026.6.17 pkg:pypi/certifi@2026.6.17` [Факт: `unzip -p … pip/_vendor/bom.cdx.json`] |
+| Как его видит Trivy | SBOM-анализатор (`pkg/fanal/analyzer/sbom/sbom.go`) читает любые `*.cdx.json`, `*.spdx`, `*.spdx.json`; FilePath пакетам ставит только для `opt/bitnami/` — отсюда `FilePath=-` [Факт по коду] |
+| Почему удаление не помогло | `pkg/fanal/applier/docker.go` `ApplyLayers`: приложения кладутся по ключу `<FilePath>/type:…`, whiteout удаляет по пути файла. У SBOM-пакетов FilePath пуст → whiteout `pip/` из нашего слоя их не снимает, находка из слоя базового образа остаётся [Факт по коду; Вывод о применении к нашему образу] |
+| Официальный образ | `docker-library/python` 3.13/slim-trixie: CPython собирается `--with-ensurepip`, pip в `site-packages` и в `ensurepip/_bundled` [Факт по Dockerfile образа] |
+
+**Исправление (`deploy/Dockerfile`).** Новая стадия `python-slim-clean` (`FROM ${PYTHON_IMAGE}`): пользователь `bm`, удаление pip / `ensurepip/_bundled` / `pip*`, затем `RUN --mount=type=bind,source=deploy/image_guard.py,…` — guard. `python-runtime` — `FROM scratch` + `COPY --from=python-slim-clean / /`: слоёв базового образа в итоговом нет, удалённый SBOM Trivy не увидит. `PATH` задан явно (ENV базового образа после scratch не наследуется; кроме `PATH` там только `GPG_KEY`, `PYTHON_VERSION`, `PYTHON_SHA256` — рантайму не нужны). Исключений Trivy нет.
+
+**Guard `deploy/image_guard.py`** (stdlib, в образ не попадает): падает на каталоге `certifi`/`certifi-*`, на SBOM-файлах (`*.cdx.json`, `*.spdx`, `*.spdx.json`) и на архивах `.whl/.zip/.egg/.pyz` с certifi внутри; перечень архивов печатает всегда. Проверен на реальном pip 26.2.1:
+```
+$ python3 -m venv gv; image_guard.py gv
+  certifi: gv/…/pip-26.2.1.dist-info/licenses/src/pip/_vendor/certifi
+  certifi: gv/…/pip/_vendor/certifi
+  SBOM: gv/…/pip/_vendor/bom.cdx.json                         → FAIL
+$ gv/bin/python -m pip uninstall --yes pip; image_guard.py gv   → архивы: 0, OK
+$ image_guard.py /usr/lib/python3.13/ensurepip
+  архив с certifi: …/_bundled/pip-26.2.1-py3-none-any.whl       → FAIL
+```
+
+**CI.** В шаге «Trivy — путь certifi…» добавлена `::notice` «Образ: архивы, SBOM, certifi»: число слоёв `bm:local` и `find / -xdev` по `*.whl`, `*.zip`, `*.egg`, `*.pyz`, `*.cdx.json`, `*.spdx*`, `certifi*` внутри образа.
+
+**npm и exit 2.** Exit 2 — код `make` при любом падении рецепта; `check.sh` выходит с 1 только при `FAILED=1`, который ставят `fail()` и `skip()` в строгом режиме; `warn()` его не трогает (закреплено тестом). Локально `make check` с `WARN npm` → rc=0. Значит, на 92b3414 exit 2 дала только строка `FAIL trivy` [Вывод].
+
+**Smoke после первого старта** (api не стартовал) — зона Backend 2, код не трогал. Замечу: `python-runtime` теперь собирается иначе (scratch + копия корня), поэтому при разборе следующего прогона сначала смотрю, не связан ли сбой с образом.
+
+```
+# красная фаза: 8 failed (guard 4, стадии 3, test_compose_static 1); зелёная:
+$ pytest tests/deploy                                                   → 87 passed
+$ DATABASE_URL=…/bm_test_devops make test   → exit 0: 805 passed, 1 skipped; Contracts 3 kept; vitest 363 passed
+$ make lint → exit 0;  actionlint (shellcheck, pyflakes) .github/workflows/ci.yml → exit 0
+```
+
 ### Вопросы техлиду
 
 1. Закреплять ли `postgres:18` по digest и в `deploy/docker-compose.yml`? Тогда в руководстве §13 путь `docker save`/`load` меняется на `docker pull postgres:18@sha256:…` + `docker tag` и требует проверки на стенде. Предлагаю для v1 оставить тег в compose, digest — в CI и `docker-compose.test.yml`.

@@ -255,6 +255,15 @@ jobs:
             --output "$PWD/deploy/ci/out/trivy-base.json" "$base" || echo "trivy: отчёт по $base не получен"
           python3 deploy/ci/gha.py trivy --pkg certifi --json deploy/ci/out/trivy-critical.json \
             --json deploy/ci/out/trivy-base.json
+          # Что в образе может дать находку без FilePath (92b3414): архивы, SBOM-файлы, любые certifi; число слоёв
+          # (python-runtime — FROM scratch + копия очищенного корня, слоёв базового образа быть не должно).
+          {
+            echo "слоёв: $(docker image inspect --format '{{len .RootFS.Layers}}' "$IMAGE")"
+            docker run --rm --entrypoint sh "$IMAGE" -c "find / -xdev \( -name '*.whl' -o -name '*.zip' \
+              -o -name '*.egg' -o -name '*.pyz' -o -name '*.cdx.json' -o -name '*.spdx*' -o -name 'certifi*' \) \
+              -not -path '/proc/*' 2>/dev/null | sort"
+          } 2>&1 | tee deploy/ci/out/image-files.txt
+          python3 deploy/ci/gha.py notice --title "Образ: архивы, SBOM, certifi" < deploy/ci/out/image-files.txt
 
       - name: Попытка make egress-host-check (root на раннере)
         id: egress

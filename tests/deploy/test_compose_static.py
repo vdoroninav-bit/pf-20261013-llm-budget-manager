@@ -333,7 +333,10 @@ def test_dockerfile_builds_spa_into_static_admin() -> None:
 def test_dockerfile_runtime_non_root_with_healthcheck() -> None:
     text = DOCKERFILE.read_text(encoding="utf-8")
     runtime = text.split("AS python-runtime", 1)[1].split("\nFROM ", 1)[0]
-    assert "--uid 10001" in runtime and "USER bm:bm" in runtime
+    # пользователь создаётся в python-slim-clean и приходит в python-runtime копией корня (T099)
+    clean = text.split("AS python-slim-clean", 1)[1].split("\nFROM ", 1)[0]
+    assert "--uid 10001" in clean and "COPY --from=python-slim-clean / /" in runtime
+    assert "USER bm:bm" in runtime
     assert "HEALTHCHECK" in runtime
     assert 'ENTRYPOINT ["bm-entrypoint"]' in runtime
 

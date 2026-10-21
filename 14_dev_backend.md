@@ -743,3 +743,36 @@ serve:   решений 200, fail_open 0,  исходы {'allow': 200}, timeout_
 
 ### Вопросы техлиду
 Нет.
+
+## 2026-10-21 — Backend 2: T098, дефект первого старта на пустой БД (CI 92b3414, первый `make smoke` FAIL)
+
+**Итог.** Причина — гонка в раннере миграций, а не в `bm.serve`. В `bm/db/migrate.py` `CREATE TABLE IF NOT EXISTS schema_migrations` выполнялся до `pg_advisory_lock`. Если на пустой схеме два процесса одновременно выполняют `CREATE … IF NOT EXISTS`, PostgreSQL отвечает одному из них `UniqueViolationError: duplicate key value violates unique constraint "pg_type_typname_nsp_index"`. Падает lifespan воркера, и uvicorn останавливает весь `api` (`Child process failed to start, stopping the parent process`). Исправление: создание `schema_migrations` перенесено под advisory-блокировку. Теперь весь DDL раннера выполняется под ней.
+
+### Как найдено (systematic-debugging)
+- Остальные шаги lifespan уже под блокировками: `ensure_initial_admin` — `pg_advisory_xact_lock`, `ensure_partitions` — `pg_advisory_xact_lock`. Без блокировки оставался только `CREATE TABLE IF NOT EXISTS schema_migrations` в `migrate()`. Его вызывают оба воркера `api` и `worker` (`bm/worker/main.py`).
+- Сквозное воспроизведение: `python -m bm.serve`, 2 воркера, схема `bm_test_b2` пересоздаётся перед каждым стартом, проверка `/healthz`. Упал 1 из 10 стартов (run 3). Трейс:
+  ```
+  bm/db/migrate.py, line 24, in migrate … asyncpg.exceptions.UniqueViolationError: duplicate key value violates
+  unique constraint "pg_type_typname_nsp_index"  DETAIL: Key (typname, typnamespace)=(schema_migrations, …) already exists.
+  Application startup failed. Exiting.
+  ```
+- Гонка зависит от времени: на старом коде в следующих сериях упало 0 из 25 стартов и с `bm.serve`, и с `uvicorn --workers 2`. [Вывод] Порядок старта `bm.serve` не меняет: обе команды идут через один и тот же `uvicorn.Multiprocess` (spawn), и обе уязвимы. То, что на 899cf1e первый smoke прошёл, — удача по времени, а не свойство старой команды. В CI на пустой БД параллельно с `api` стартует ещё и контейнер `worker` (3 претендента).
+
+### Регресс-тест (TDD) — `tests/integration/test_migrate_concurrent.py` (новый)
+- `test_migrate_runs_no_ddl_before_advisory_lock` — детерминированный. Тест держит блокировку миграций, `migrate()` на другом соединении за 0,3 с не должен создать `schema_migrations`, после снятия блокировки применяет миграции.
+- `test_parallel_first_migrate_on_empty_schema`: 15 раундов по 4 параллельных `migrate()` на пустой схеме. Ни одной ошибки; миграции применяет ровно один процесс.
+- Красная фаза (до исправления):
+  ```
+  E   AssertionError: migrate() создаёт schema_migrations до advisory-блокировки — гонка первого старта
+  E   AssertionError: параллельный первый migrate() упал: UniqueViolationError('duplicate key value violates unique constraint "pg_type_typname_nsp_index"')
+  2 failed in 0.93s
+  ```
+- Зелёная: `test_migrate_concurrent.py` + `test_migrations.py` — `16 passed in 5.42s`.
+- Сквозная проверка после исправления: 0 из 30 первых стартов `python -m bm.serve` (2 воркера) упали; для сравнения `uvicorn --workers 2` — 0 из 25.
+
+### Полный прогон
+- `DATABASE_URL=…/bm_test_b2 SKIP_FRONTEND=1 make test`: `799 passed, 1 skipped in 240.34s`, `Contracts: 3 kept, 0 broken`, rc=0.
+- `make lint`: `All checks passed!`, `173 files already formatted`, `Contracts: 3 kept, 0 broken`. Перед этим `ruff` нашёл длинную строку в docstring `migrate()`. Её перенёс, после чего повторил `make lint` и два теста миграций; полный `make test` после правки текста не повторял.
+
+### Вопросы техлиду
+- Нужна приёмка: повтор CI-цепочки `make up` → первый `make smoke` на пустой БД (DevOps/QA). Локально стек в Docker не проверить.

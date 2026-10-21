@@ -20,14 +20,19 @@ def available() -> list[tuple[str, Path]]:
 
 
 async def migrate(conn: asyncpg.Connection) -> list[str]:
-    """Применяет недостающие миграции; возвращает список применённых версий."""
-    await conn.execute(
-        "CREATE TABLE IF NOT EXISTS schema_migrations ("
-        " version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"
-    )
+    """Применяет недостающие миграции; возвращает список применённых версий.
+
+    Весь DDL — под advisory-блокировкой, включая `CREATE TABLE IF NOT EXISTS schema_migrations`:
+    параллельные `IF NOT EXISTS` на пустой схеме дают UniqueViolationError в pg_type
+    (первый старт двух воркеров api и worker).
+    """
     applied: list[str] = []
     await conn.execute("SELECT pg_advisory_lock($1)", _LOCK_KEY)
     try:
+        await conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations ("
+            " version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"
+        )
         done = {r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")}
         for version, path in available():
             if version in done:

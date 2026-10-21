@@ -1,7 +1,10 @@
 """Статические требования к образу и цепочке поставки (T098, T099; 14_tech_rulings.md, пакет 5, 5Д1, 5Д3).
 
-- T099 (5Д3): в стадии python-runtime нет pip базового образа (вложенный в pip certifi 2026.6.17 —
-  Trivy CRITICAL GHSA-6q48-6c7w-9gw2 на CI 34d28d0 и 899cf1e); исключений для Trivy нет; базовые образы и
+- T099 (5Д3): в образе нет pip базового образа. Trivy находит certifi 2026.6.17 по SBOM pip
+  (`pip/_vendor/bom.cdx.json`, у таких пакетов FilePath пуст) и не снимает находку, если файл удалён в верхнем
+  слое (whiteout сопоставляется по FilePath; CI 92b3414). Поэтому pip удаляется в стадии python-slim-clean,
+  а python-runtime — `FROM scratch` + копия очищенного корня: слоёв базового образа в итоговом нет.
+  Исключений для Trivy нет; базовые образы и
   инструменты CI закреплены по digest из аннотации прогона 899cf1e (4Д1); путь найденного certifi — в ::notice.
 - 5Д5: npm audit гейтует только critical; moderate — предупреждение (WARN) с перечнем advisory.
 - 5Д8 (1): цель `load` в Makefile — в зоне DevOps, поведение прежнее (tests/load/run_load.sh).
@@ -37,9 +40,17 @@ def _code(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
 
 
-def _runtime_stage() -> str:
+def _stage(name: str) -> str:
     text = _code(DOCKERFILE.read_text(encoding="utf-8"))
-    return text.split("AS python-runtime", 1)[1].split("\nFROM ", 1)[0]
+    return text.split(f"AS {name}\n", 1)[1].split("\nFROM ", 1)[0]
+
+
+def _runtime_stage() -> str:
+    return _stage("python-runtime")
+
+
+def _clean_stage() -> str:
+    return _stage("python-slim-clean")
 
 
 def _joined(text: str) -> str:
@@ -50,27 +61,43 @@ def _joined(text: str) -> str:
 # ---------------------------------------------------------------- T099: pip базового образа
 
 
-def test_runtime_stage_uninstalls_base_image_pip() -> None:
-    runtime = _joined(_runtime_stage())
-    assert re.search(r"python -m pip uninstall --yes pip\b", runtime), "pip базового образа не удалён"
-    # копия pip для ensurepip (wheel с тем же вложенным certifi) и обёртки pip* тоже удаляются
-    assert "/usr/local/lib/python3.*/ensurepip/_bundled" in runtime
-    assert re.search(r"rm -f[^\n]*/usr/local/bin/pip\b", runtime)
+def test_clean_stage_uninstalls_base_image_pip() -> None:
+    text = _code(DOCKERFILE.read_text(encoding="utf-8"))
+    assert re.search(r"^FROM \$\{PYTHON_IMAGE\} AS python-slim-clean$", text, re.M)
+    clean = _joined(_clean_stage())
+    assert re.search(r"python -m pip uninstall --yes pip\b", clean), "pip базового образа не удалён"
+    # копия pip для ensurepip (wheel с тем же SBOM и certifi) и обёртки pip* тоже удаляются
+    assert "/usr/local/lib/python3.*/ensurepip/_bundled" in clean
+    assert re.search(r"rm -f[^\n]*/usr/local/bin/pip\b", clean)
+    assert re.search(r"if python -c ['\"]import pip['\"][^\n]*then[^\n]*exit 1", clean)
 
 
-def test_runtime_stage_fails_build_if_pip_or_foreign_certifi_left() -> None:
-    runtime = _joined(_runtime_stage())
-    assert re.search(r"if python -c ['\"]import pip['\"][^\n]*then[^\n]*exit 1", runtime), (
-        "сборка должна падать, если pip остался"
+def test_clean_stage_runs_image_guard_from_bind_mount() -> None:
+    """Сборка падает, если в корне остались certifi (каталог, dist-info), SBOM-файлы (*.cdx.json, *.spdx*)
+    или архивы (.whl/.zip/.egg/.pyz) с certifi. Скрипт монтируется на время RUN и в образ не попадает."""
+    clean = _joined(_clean_stage())
+    assert re.search(
+        r"RUN --mount=type=bind,source=deploy/image_guard\.py,target=/tmp/image_guard\.py"
+        r" python /tmp/image_guard\.py /",
+        clean,
     )
-    assert re.search(r"find / -xdev[^\n]*-name certifi -o -name 'certifi-\*'", runtime), (
-        "сборка должна падать, если certifi есть вне /app/.venv"
-    )
-    # проверка до копирования окружения поставки: в /app/.venv certifi из uv.lock законен
-    lines = runtime.splitlines()
-    guard = next(i for i, line in enumerate(lines) if "find / -xdev" in line and "certifi" in line)
-    venv = next(i for i, line in enumerate(lines) if line.startswith("COPY --from=python-deps /app/.venv"))
-    assert guard < venv
+    # guard — после удаления pip
+    assert clean.index("pip uninstall") < clean.index("image_guard.py")
+
+
+def test_runtime_is_flattened_from_clean_stage() -> None:
+    """Итоговый образ не содержит слоёв базового образа: Trivy не видит удалённый SBOM pip."""
+    text = _code(DOCKERFILE.read_text(encoding="utf-8"))
+    assert re.search(r"^FROM scratch AS python-runtime$", text, re.M)
+    runtime = _runtime_stage()
+    first = runtime.strip().splitlines()[0]
+    assert first == "COPY --from=python-slim-clean / /", first
+    # ENV базового образа после scratch не наследуется — PATH задан явно, /usr/local/bin раньше /usr/bin
+    path = re.search(r"PATH=(\S+)", runtime)
+    assert path, "PATH"
+    parts = path.group(1).split(":")
+    assert parts[0] == "/app/.venv/bin" and "/usr/local/bin" in parts and "$PATH" not in parts
+    assert parts.index("/usr/local/bin") < parts.index("/usr/bin")
 
 
 def test_runtime_stage_installs_nothing_with_pip() -> None:
@@ -192,3 +219,14 @@ def test_stack_sh_runs_bm_serve_not_uvicorn_workers() -> None:
 def test_no_direct_uvicorn_workers_in_dockerfile() -> None:
     code = _joined(_code(DOCKERFILE.read_text(encoding="utf-8")))
     assert not re.search(r"\buvicorn\b[^\n]*--workers", code)
+
+
+def test_ci_lists_archives_and_sboms_in_image_notice() -> None:
+    """Диагностика CI (92b3414): что в образе может дать находку без FilePath — .whl/.zip, SBOM, certifi."""
+    ci = _joined(CI_YML.read_text(encoding="utf-8"))
+    step = ci.split("name: Trivy — путь certifi", 1)[1].split("\n      - name:", 1)[0]
+    assert re.search(r"docker run --rm --entrypoint sh \"\$IMAGE\" -c", step)
+    for pattern in ("*.whl", "*.zip", "*.cdx.json", "*.spdx*", "certifi*"):
+        assert f"-name '{pattern}'" in step, pattern
+    assert "RootFS.Layers" in step
+    assert re.search(r'gha\.py notice --title "Образ: архивы, SBOM, certifi"', step)

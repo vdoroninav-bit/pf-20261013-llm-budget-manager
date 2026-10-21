@@ -402,7 +402,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
 
 **Среда разработки** (14_tech_rulings.md, пакет 3, 3Д1–3Д2): реестры образов закрыты (403). Поставка подтверждается статически, в CI (T092, с журналом прогона) и на стеке из локальных процессов (T087, T093). Каждый гейт получает статус PASS / PASS-замена / НЕ ПРОВЕРЕНО / FAIL.
 
-- [ ] **T086 [P] [—] [qa] Нагрузочный тест SC-001 и SC-004.**
+- [x] **T086 [P] [—] [qa] Нагрузочный тест SC-001 и SC-004.**
   - Файлы: `tests/load/{targets.py, run_load.sh}`, цель `make load`.
   - Работа: генерация целей vegeta для 1 000 сотрудников и 30 моделей; 50 rps × 10 мин; p95 и p99 берутся из гистограммы `/metrics` и из отчёта vegeta; граница лимита: факт = оценка × 1,1, перерасход ≤ 2%.
   - В этой среде (пакет 3, 3Д1): прогон идёт на стеке из локальных процессов (`make up-local`). Если vegeta получить нельзя, нагрузку даёт генератор на `httpx` (уже есть в dev-зависимостях) с фиксированной частотой; p95/p99 берутся из `/metrics`, в отчёте указано «vegeta не использован». Числа помечаются «среда разработки, не эталонный стенд», статус гейта SC-001 — PASS-замена.
@@ -515,7 +515,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
   - Пакет 5 (5Б2): попутное исправление `SESSION_SECRET_FILE` (обязательный секрет только из файла) и перенос чтения `*_FILE` в `before`-валидатор приняты в рамках T097; в `16_release.md` — строка в «Дефекты, исправленные до релиза».
   - Готово: `make test` (своя БД `bm_test_b1`), сначала красная фаза новых тестов.
   - Зависимости: T062.
-- [ ] **T098 [—] [backend] Д-1: TCP_NODELAY у `api` при нескольких воркерах** (14_tech_rulings.md, пакет 5, 5Д1, 5Д2). Исполнитель — Backend 2; часть DevOps отмечена ниже.
+- [x] **T098 [—] [backend] Д-1: TCP_NODELAY у `api` при нескольких воркерах** (14_tech_rulings.md, пакет 5, 5Д1, 5Д2). Исполнитель — Backend 2; часть DevOps отмечена ниже.
   - Файлы: `app/backend/bm/serve.py` (новый), `tests/integration/test_keepalive_latency.py` (новый), `tests/unit/test_serve.py` (новый); DevOps — `deploy/Dockerfile` (`CMD`), `deploy/local/stack.sh`, `tests/deploy/test_compose_static.py` или отдельный статический тест Dockerfile.
   - Работа (Backend 2):
     - `bm/serve.py`: подкласс `uvicorn.protocols.http.h11_impl.H11Protocol` на уровне модуля; в `connection_made` ставит `TCP_NODELAY=1` на сокет транспорта, если сокет TCP (AF_INET/AF_INET6), на прочих ничего не делает;
@@ -540,7 +540,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
     - **запрещено:** `.trivyignore`, `--ignore-unfixed`, понижение порога или иное исключение для CRITICAL;
     - попутно: закрепить digest базовых образов из аннотации прогона `34d28d0` (4Д1 (2)); выписать идентификаторы advisory npm (7 moderate, `decode-uri-component` через react-admin) из `npm audit --json` в `14_devops.md` — они идут в `16_release.md` как известное ограничение (5Д5).
   - Готово: в журнале CI для релизного SHA `CHECK_STRICT=1 make check` — exit 0, Trivy `CRITICAL: 0`; в `14_devops.md` — найденный путь и причина.
-  - Статус (DevOps, 2026-10-21): исправление по источнику сделано (`pip` базового образа удалён из `python-runtime`), digest закреплены по прогону `899cf1e`, advisory npm выписаны; окончательно — по аннотациям CI релизного SHA (Trivy `CRITICAL: 0`, notice «Trivy: CRITICAL и путь certifi»). Отчёт — `14_devops.md`, раздел пакета 5.
+  - Статус (DevOps, 2026-10-21): исправление по источнику сделано: источник — SBOM pip `pip/_vendor/bom.cdx.json` в слоях базового образа (CI `92b3414`); `python-runtime` — `FROM scratch` + копия очищенного от pip корня, guard `deploy/image_guard.py`, digest закреплены по прогону `899cf1e`, advisory npm выписаны; окончательно — по аннотациям CI релизного SHA (Trivy `CRITICAL: 0`, notice «Trivy: CRITICAL и путь certifi»). Отчёт — `14_devops.md`, раздел пакета 5.
   - Зависимости: T088, T092.
 - [ ] **T089 [—] [qa] Релизный прогон и гейты.**
   - Работа: `make test` (на `bm_test`, без параллельных прогонов), `make up`, `make smoke`, `make load`, `make failover`, `make check`, `make egress-host-check` (стенд QA), тест восстановления, установка по руководству. `make egress-host-check` проводится при пустом `IMPORT_HTTPS_PROXY` и `IMPORT_ENABLED=false`.

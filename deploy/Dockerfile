@@ -42,28 +42,34 @@ RUN uv sync --project app/backend --frozen --no-dev --no-install-project
 COPY app/backend/bm app/backend/bm
 RUN uv sync --project app/backend --frozen --no-dev --no-editable
 
-# ---------- рантайм: без uv, без компиляторов, непривилегированный пользователь ----------
-FROM ${PYTHON_IMAGE} AS python-runtime
+# ---------- очищенный базовый образ: без pip и его SBOM (T099, 5Д3) ----------
+# pip базового образа в рантайме не нужен (зависимости приходят готовым /app/.venv, healthcheck — только python).
+# pip 26.2/26.2.1 вендорит certifi 2026.6.17 и несёт pip/_vendor/bom.cdx.json (CycloneDX). Trivy читает этот SBOM
+# (пакеты с пустым FilePath) и не снимает находку, если файл удалён в верхнем слое: whiteout сопоставляется по
+# FilePath (CI 92b3414). Поэтому чистка — в отдельной стадии, а python-runtime собирается FROM scratch копией её
+# корня: слоёв базового образа в итоговом нет. Удаляются pip, wheel ensurepip, обёртки pip*; guard
+# (deploy/image_guard.py, смонтирован только на время RUN) роняет сборку, если остались certifi, SBOM-файлы или
+# архивы .whl/.zip/.egg/.pyz с certifi, и печатает все архивы.
+FROM ${PYTHON_IMAGE} AS python-slim-clean
 RUN groupadd --system --gid 10001 bm \
  && useradd --system --uid 10001 --gid bm --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin bm
-# T099 (5Д3): pip базового образа в рантайме не нужен (зависимости приходят готовым /app/.venv, healthcheck —
-# только python), а его вложенный certifi (pip/_vendor) отстаёт от uv.lock: на CI 34d28d0 Trivy CRITICAL
-# certifi 2026.6.17 (GHSA-6q48-6c7w-9gw2; pip 26.2/26.2.1 вендорят certifi 2026.6.17). Удаляются pip, его wheel для ensurepip и обёртки pip*.
-# Сборка падает, если pip остался или пакет certifi (каталог certifi, certifi-*.dist-info) есть вне окружения
-# поставки: проверка — до COPY /app/.venv (маска не *certifi*: она совпала бы с ca-certificates).
 RUN set -eu; \
     python -m pip uninstall --yes pip; \
     rm -rf /usr/local/lib/python3.*/ensurepip/_bundled; \
     rm -f /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.*; \
-    if python -c 'import pip' 2>/dev/null; then echo 'pip остался в образе' >&2; exit 1; fi; \
-    left="$(find / -xdev \( -path /proc -o -path /sys \) -prune -o \( -name certifi -o -name 'certifi-*' \) -print)"; \
-    if [ -n "$left" ]; then echo "certifi вне /app/.venv: $left" >&2; exit 1; fi
+    if python -c 'import pip' 2>/dev/null; then echo 'pip остался в образе' >&2; exit 1; fi
+RUN --mount=type=bind,source=deploy/image_guard.py,target=/tmp/image_guard.py python /tmp/image_guard.py /
+
+# ---------- рантайм: без uv, без компиляторов, без слоёв базового образа, непривилегированный пользователь ----------
+FROM scratch AS python-runtime
+COPY --from=python-slim-clean / /
 COPY --from=python-deps /app/.venv /app/.venv
 COPY --from=node-build /src/app/frontend/dist /app/static/admin
 COPY deploy/docker-entrypoint.sh /usr/local/bin/bm-entrypoint
 COPY deploy/healthcheck.py /app/healthcheck.py
 RUN chmod 0755 /usr/local/bin/bm-entrypoint && chmod 0644 /app/healthcheck.py
-ENV PATH=/app/.venv/bin:$PATH \
+# ENV базового образа после FROM scratch не наследуется: PATH — как в python:3.13-slim (/usr/local/bin первым).
+ENV PATH=/app/.venv/bin:/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UVICORN_WORKERS=2
