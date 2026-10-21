@@ -115,3 +115,86 @@ def test_import_https_proxy_bad_scheme_fails_at_start(monkeypatch: pytest.Monkey
     text = str(err.value)
     assert "IMPORT_HTTPS_PROXY" in text and "http://" in text  # понятный текст на русском
     assert PROXY_PASSWORD not in text  # ошибка старта не печатает пароль
+
+
+# ---------------------------------------------------------------- T097: IMPORT_HTTPS_PROXY_FILE (пакет 4, 4Д4)
+
+
+def test_import_https_proxy_file_has_priority(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    f = tmp_path / "import_https_proxy"
+    f.write_text(f"http://svc:{PROXY_PASSWORD}@10.0.0.1:3128\n", encoding="utf-8")
+    _env(
+        monkeypatch,
+        DATABASE_URL="postgresql://u@h/db_test",
+        SESSION_SECRET="s" * 32,
+        IMPORT_HTTPS_PROXY="http://from-env:3128",
+        IMPORT_HTTPS_PROXY_FILE=str(f),
+    )
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.import_https_proxy is not None
+    assert s.import_https_proxy.get_secret_value() == f"http://svc:{PROXY_PASSWORD}@10.0.0.1:3128"
+    assert PROXY_PASSWORD not in repr(s) + str(s) + s.model_dump_json()
+
+
+def test_import_https_proxy_empty_file_means_direct(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    f = tmp_path / "import_https_proxy"
+    f.write_text("\n", encoding="utf-8")
+    _env(
+        monkeypatch,
+        DATABASE_URL="postgresql://u@h/db_test",
+        SESSION_SECRET="s" * 32,
+        IMPORT_HTTPS_PROXY_FILE=str(f),
+    )
+    assert Settings(_env_file=None).import_https_proxy is None  # type: ignore[call-arg]
+
+
+@pytest.mark.parametrize(
+    "url", [f"socks5://svc:{PROXY_PASSWORD}@proxy:1080", f"svc:{PROXY_PASSWORD}@proxy:3128", "http://"]
+)
+def test_import_https_proxy_file_scheme_checked(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, url: str
+) -> None:
+    """Проверка схемы http(s):// действует и для значения из файла; ошибка не печатает пароль."""
+    f = tmp_path / "import_https_proxy"
+    f.write_text(url + "\n", encoding="utf-8")
+    _env(
+        monkeypatch,
+        DATABASE_URL="postgresql://u@h/db_test",
+        SESSION_SECRET="s" * 32,
+        IMPORT_HTTPS_PROXY="http://from-env:3128",  # корректное значение из окружения не спасает: _FILE главнее
+        IMPORT_HTTPS_PROXY_FILE=str(f),
+    )
+    with pytest.raises(ValidationError) as err:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+    text = str(err.value)
+    assert "IMPORT_HTTPS_PROXY" in text and "http://" in text
+    assert PROXY_PASSWORD not in text
+
+
+def test_import_https_proxy_file_missing_fails_at_start(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Файл указан, но его нет — ошибка старта на русском с именем переменной, без значений секретов."""
+    missing = tmp_path / "нет-такого"
+    _env(
+        monkeypatch,
+        DATABASE_URL="postgresql://u@h/db_test",
+        SESSION_SECRET="s" * 32,
+        IMPORT_HTTPS_PROXY=f"http://svc:{PROXY_PASSWORD}@10.0.0.1:3128",
+        IMPORT_HTTPS_PROXY_FILE=str(missing),
+    )
+    with pytest.raises(ValidationError) as err:
+        Settings(_env_file=None)  # type: ignore[call-arg]
+    text = str(err.value)
+    assert "IMPORT_HTTPS_PROXY_FILE" in text and "не удалось прочитать файл" in text
+    assert PROXY_PASSWORD not in text and "s" * 32 not in text
+
+
+def test_session_secret_from_file_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Compose передаёт только SESSION_SECRET_FILE: обязательный секрет из файла — достаточно (найдено в T097)."""
+    f = tmp_path / "session_secret"
+    f.write_text("x" * 32 + "\n", encoding="utf-8")
+    _env(monkeypatch, DATABASE_URL="postgresql://u@h/db_test", SESSION_SECRET_FILE=str(f))
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert s.session_secret.get_secret_value() == "x" * 32

@@ -1,7 +1,7 @@
 """T032 / SC-003: подтверждённые отчёты не теряются при принудительной остановке (ADR-002: 200 только после COMMIT).
 
 Стек поднят. 4 потока шлют пары «решение → отчёт» напрямую в HTTP API. Через 10 с — `docker compose kill api`
-(SIGKILL посреди запросов), затем `start api`. Поток продолжается до 30 с; ошибки соединения в окне перезапуска
+(при BM_STACK=local — SIGKILL всей группы процессов api: мастер uvicorn и воркеры), затем `start api`. Поток продолжается до 30 с; ошибки соединения в окне перезапуска
 ожидаемы и не считаются. Проверка: КАЖДЫЙ report_id, на который API ответил 200, есть в БД ровно один раз.
 
 Эталонный клиент здесь не нужен: проверяется сервер. Тест пропускается без BM_FAILOVER=1 (см. conftest.py).
@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import httpx
 
-from tests.failover.stack import BASE_URL, compose, provision, report_counts, wait_ready
+from tests.failover.stack import BASE_URL, STACK, kill, provision, report_counts, start, wait_ready
 
 THREADS = 4
 DURATION_S = 30
@@ -84,9 +84,9 @@ def test_sc003_kill_api_under_load_loses_no_confirmed_report(stack: None) -> Non
     with lock:
         before_kill = len(confirmed)
     try:
-        compose("kill", "api")
+        kill("api")
     finally:
-        compose("start", "api")
+        start("api")
         wait_ready(120)
     for t in threads:
         t.join(timeout=DURATION_S + 30)
@@ -100,3 +100,7 @@ def test_sc003_kill_api_under_load_loses_no_confirmed_report(stack: None) -> Non
     dupes = [rid for rid, n in counts.items() if n > 1]
     assert not lost, f"потеряно {len(lost)} из {len(confirmed)} подтверждённых отчётов (SC-003)"
     assert not dupes
+    print(  # итог для 15_qa_report.md (видно с `pytest -s`)
+        f"SC-003 [{STACK}]: подтверждено 200 — {len(confirmed)} (до kill {before_kill}), "
+        f"потеряно {len(lost)}, дублей {len(dupes)}; прочее {stats}"
+    )

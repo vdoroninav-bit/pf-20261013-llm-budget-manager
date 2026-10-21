@@ -5,11 +5,21 @@
 #              тесты и сборка фронтенда в контейнере node:24-slim (тот же образ, что стадия node-build Dockerfile)
 #   delivery — make build, make up && make smoke && make backup && make restore && make smoke, make failover,
 #              CHECK_STRICT=1 make check (Trivy по образу), попытка make egress-host-check
-# Артефакты прогона: SBOM и сводка make check (deploy/ci/out), журналы compose.
+# Артефакты прогона (actions/upload-artifact, 4Д3): SBOM и сводка make check (deploy/ci/out), журналы гейтов
+# (deploy/ci/out/gha/*.log), журналы compose. sha256 SBOM и сводка make check остаются и в журнале.
 #
-# Сторонних actions — только actions/checkout. Секретов нет: тестам не нужны ключи провайдеров, а пароли стенда
-# генерируются в самом прогоне (openssl rand) и живут только на раннере.
-# Результат засчитывается в релиз только с журналом прогона (gh run view --log) для того же SHA (3Д1(б)).
+# Диагностика через аннотации (пакет 4, 4Д1): журнал и артефакты GitHub отдаёт через blob-хранилище, которое
+# из среды оркестратора закрыто; доступны статусы шагов и аннотации check-run. Поэтому каждый гейт идёт через
+# deploy/ci/gha.py: при падении — ::error title=<шаг>::<хвост вывода или сводка pytest> (≤ 4 КБ), у шагов
+# стека — ещё «состояние стека» (compose ps + журналы нездоровых сервисов); в конце задачи — ::notice со
+# сводкой гейтов. Не больше 10 аннотаций на задачу. Секреты стенда маскируются ::add-mask:: и заменяются на ***.
+# Шаги после упавшего гейта, которым он не нужен, всё равно выполняются (if: steps.<id>.outcome), чтобы один
+# прогон показывал статус каждого гейта; задача при этом остаётся красной.
+#
+# Сторонних actions нет: только actions/checkout и actions/upload-artifact (издатель actions/, 3Д4, 4Д3).
+# Секретов в workflow нет: тестам не нужны ключи провайдеров, а пароли стенда генерируются в самом прогоне
+# (openssl rand) и живут только на раннере.
+# Результат засчитывается в релиз только с журналом (или аннотациями) прогона для того же SHA (3Д1(б), 4Д1).
 name: ci
 
 on:
@@ -61,34 +71,64 @@ jobs:
       # vitest и сборка фронтенда — отдельным шагом в контейнере Node 24.
       SKIP_FRONTEND: "1"
     steps:
-      # [Гипотеза] версия v5 не проверена из среды разработки (API GitHub закрыт); при ошибке — actions/checkout@v4.
+      # [Факт] v5 разрешилась в прогоне 39552101693 (задача test — SUCCESS).
       - uses: actions/checkout@v5
 
       - name: Инструменты (uv)
+        id: tools
         run: |
-          python3 -m pip install --user "uv==${UV_VERSION}"
+          python3 deploy/ci/gha.py run --title "pip install uv" -- python3 -m pip install --user "uv==${UV_VERSION}"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Версии
+        id: versions
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
         run: |
-          uv --version
-          docker version --format 'docker {{.Server.Version}}'
-          docker compose version
-          psql "$DATABASE_URL" -Atc 'SHOW server_version' || true
+          {
+            uv --version
+            docker version --format 'docker {{.Server.Version}}'
+            docker compose version
+            psql "$DATABASE_URL" -Atc 'SHOW server_version' | sed 's/^/postgres /' || echo "postgres: нет ответа"
+          } 2>&1 | tee versions.txt
+          python3 deploy/ci/gha.py notice --title "Версии (test)" < versions.txt
 
       - name: make lint
-        run: make lint
+        id: lint
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --title "make lint" -- make lint
 
       - name: make compose-check (docker compose config + tests/deploy)
-        run: make compose-check
+        id: compose_check
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --title "make compose-check" -- make compose-check
 
       - name: make test (PostgreSQL 18)
-        run: make test
+        id: test
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --title "make test (PG 18)" -- make test
 
       - name: Frontend — npm ci, vitest, build (Node 24)
+        id: frontend
+        if: ${{ !cancelled() }}
         run: |
-          docker run --rm -v "$PWD:/src" -w /src/app/frontend "$NODE_IMAGE" \
-            sh -c 'npm ci --no-audit --no-fund && npm run test && npm run build'
+          python3 deploy/ci/gha.py run --title "frontend (node 24)" -- \
+            docker run --rm -v "$PWD:/src" -w /src/app/frontend "$NODE_IMAGE" \
+              sh -c 'npm ci --no-audit --no-fund && npm run test && npm run build'
+
+      - name: Сводка гейтов (::notice)
+        if: always()
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+        run: python3 deploy/ci/gha.py summary
+
+      # [Гипотеза] версия v4 не проверена из среды разработки (API GitHub закрыт).
+      - name: Артефакт — журналы гейтов
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-${{ github.sha }}
+          path: deploy/ci/out/gha/
+          if-no-files-found: warn
 
   delivery:
     name: build + up/smoke/backup/restore + failover + check
@@ -99,43 +139,88 @@ jobs:
       IMAGE: bm:local
       BM_IMAGE: bm:local
     steps:
-      # [Гипотеза] см. выше.
       - uses: actions/checkout@v5
 
       - name: Инструменты (uv)
+        id: tools
         run: |
-          python3 -m pip install --user "uv==${UV_VERSION}"
+          python3 deploy/ci/gha.py run --title "pip install uv" -- python3 -m pip install --user "uv==${UV_VERSION}"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: deploy/.env стенда CI (секреты генерируются здесь, в журнал не печатаются)
+      - name: deploy/.env стенда CI (секреты генерируются здесь и маскируются до записи)
+        id: stand_env
         run: |
           cp deploy/.env.example deploy/.env
           set_var() { sed -i "s|^$1=.*|$1=$2|" deploy/.env; }
-          set_var POSTGRES_PASSWORD "$(openssl rand -hex 24)"
-          set_var SESSION_SECRET "$(openssl rand -hex 32)"
-          set_var ADMIN_INITIAL_PASSWORD "init-$(openssl rand -hex 12)"
-          set_var BM_ADMIN_PASSWORD "ci-$(openssl rand -hex 12)"
-          # Пароль после смены нужен отказным тестам (tests/failover берёт BM_ADMIN_PASSWORD из окружения).
-          echo "::add-mask::$(grep '^BM_ADMIN_PASSWORD=' deploy/.env | cut -d= -f2)"
-          echo "BM_ADMIN_PASSWORD=$(grep '^BM_ADMIN_PASSWORD=' deploy/.env | cut -d= -f2)" >> "$GITHUB_ENV"
+          pg="$(openssl rand -hex 24)"
+          session="$(openssl rand -hex 32)"
+          initial="init-$(openssl rand -hex 12)"
+          bm_admin="ci-$(openssl rand -hex 12)"
+          # Маски — до первого использования значений (4Д1): в журнале и аннотациях они заменяются на ***.
+          for v in "$pg" "$session" "$initial" "$bm_admin"; do echo "::add-mask::$v"; done
+          set_var POSTGRES_PASSWORD "$pg"
+          set_var SESSION_SECRET "$session"
+          set_var ADMIN_INITIAL_PASSWORD "$initial"
+          set_var BM_ADMIN_PASSWORD "$bm_admin"
+          # Пароль после смены нужен smoke и отказным тестам (tests/failover берёт BM_ADMIN_PASSWORD из окружения).
+          echo "BM_ADMIN_PASSWORD=$bm_admin" >> "$GITHUB_ENV"
+          grep -c '^[A-Z_]*=.' deploy/.env | sed 's/^/заполнено переменных: /'
 
       - name: make build
-        run: make build
+        id: build
+        if: ${{ !cancelled() && steps.tools.outcome == 'success' && steps.stand_env.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --title "make build" -- make build
 
-      - name: Digest базовых образов (для закрепления по @sha256 в Dockerfile)
+      - name: Версии и digest базовых образов (::notice, для закрепления по @sha256 в Dockerfile)
+        id: digests
+        if: ${{ !cancelled() }}
         run: |
-          for img in python:3.13-slim "$NODE_IMAGE" postgres:18; do
-            docker pull -q "$img" >/dev/null
-            docker image inspect --format '{{index .RepoDigests 0}}' "$img"
-          done
+          {
+            docker version --format 'docker {{.Server.Version}}'
+            docker compose version
+            for img in python:3.13-slim "$NODE_IMAGE" postgres:18 "$TRIVY_IMAGE"; do
+              if docker pull -q "$img" >/dev/null 2>pull.err; then
+                docker image inspect --format '{{index .RepoDigests 0}}' "$img" || echo "$img: нет RepoDigests"
+              else
+                echo "$img: pull не удался: $(tail -c 300 pull.err)"
+              fi
+            done
+          } 2>&1 | tee digests.txt
+          python3 deploy/ci/gha.py notice --title "Версии и digest базовых образов" < digests.txt
 
-      - name: make up && make smoke && make backup && make restore && make smoke
-        run: make up && make smoke && make backup && make restore && make smoke
+      - name: make up
+        id: up
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --stack --title "make up" -- make up
+
+      - name: make smoke
+        id: smoke
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --stack --title "make smoke" -- make smoke
+
+      - name: make backup
+        id: backup
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --stack --title "make backup" -- make backup
+
+      - name: make restore
+        id: restore
+        if: ${{ !cancelled() && steps.backup.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --stack --title "make restore" -- make restore
+
+      - name: make smoke после restore
+        id: smoke_after_restore
+        if: ${{ !cancelled() && steps.restore.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --stack --title "make smoke после restore" -- make smoke
 
       - name: make failover (SC-002, SC-003)
-        run: make failover
+        id: failover
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        run: python3 deploy/ci/gha.py run --stack --title "make failover" -- make failover
 
       - name: CHECK_STRICT=1 make check (SBOM, лицензии, pip-audit, npm audit, Trivy по образу)
+        id: check
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         env:
           CHECK_STRICT: "1"
           # Trivy в контейнере: сокет Docker для доступа к образу, каталог проекта — по тому же пути (SBOM в deploy/ci/out).
@@ -143,32 +228,51 @@ jobs:
             docker run --rm -v /var/run/docker.sock:/var/run/docker.sock
             -v ${{ github.workspace }}:${{ github.workspace }} -v trivy-cache:/root/.cache/trivy
             ${{ env.TRIVY_IMAGE }}
-        run: make check
+        run: python3 deploy/ci/gha.py run --title "CHECK_STRICT=1 make check" -- make check
 
       - name: Попытка make egress-host-check (root на раннере)
-        # Попытка (3Д1(б)): результат виден в журнале; сбой не роняет прогон — гейт ставит QA по журналу (T089).
+        id: egress
+        # Попытка (3Д1(б)): результат виден в аннотации; сбой не роняет прогон — гейт ставит QA (T089).
         continue-on-error: true
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "BM_ADMIN_PASSWORD=$BM_ADMIN_PASSWORD" make egress-host-check
+        if: ${{ !cancelled() && steps.up.outcome == 'success' }}
+        run: |
+          python3 deploy/ci/gha.py run --title "egress-host-check (попытка)" -- \
+            sudo env "PATH=$PATH" "HOME=$HOME" "BM_ADMIN_PASSWORD=$BM_ADMIN_PASSWORD" make egress-host-check
 
       - name: Журналы стека
         if: always()
         run: |
           docker compose -f deploy/docker-compose.yml --env-file deploy/.env ps -a || true
           docker compose -f deploy/docker-compose.yml --env-file deploy/.env logs --no-color > compose-logs.txt 2>&1 || true
+          echo "=== compose-logs.txt (хвост) ==="; tail -n 300 compose-logs.txt || true
 
       - name: Остановить стек
         if: always()
         run: docker compose -f deploy/docker-compose.yml --env-file deploy/.env down -v || true
 
-      # Выгрузка артефактов без сторонних actions: содержимое печатается в журнал прогона (он и есть доказательство
-      # для релиза), а SBOM — в сжатом виде base64, восстанавливается из журнала: base64 -d | gunzip.
-      - name: Артефакты (сводка make check, SBOM) — в журнал
+      # Сводка make check и sha256 SBOM — в журнал (сверка с артефактом); сами SBOM — только артефактом (4Д3).
+      - name: Сводка make check и sha256 SBOM — в журнал
         if: always()
         run: |
           echo "=== deploy/ci/out/summary.txt ==="; cat deploy/ci/out/summary.txt || true
           for f in deploy/ci/out/sbom-*.cdx.json; do
-            [ -f "$f" ] || continue
-            echo "=== $f (gzip|base64) sha256=$(sha256sum "$f" | cut -d' ' -f1) ==="
-            gzip -9c "$f" | base64 -w 0; echo
+            [ -f "$f" ] && echo "sha256 $(sha256sum "$f")"
           done
-          echo "=== compose-logs.txt (хвост) ==="; tail -n 300 compose-logs.txt || true
+          true
+
+      - name: Сводка гейтов (::notice)
+        if: always()
+        env:
+          STEPS_JSON: ${{ toJSON(steps) }}
+        run: python3 deploy/ci/gha.py summary
+
+      # [Гипотеза] версия v4 не проверена из среды разработки (API GitHub закрыт).
+      - name: Артефакт — SBOM, сводка make check, журналы гейтов и compose
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-${{ github.sha }}
+          path: |
+            deploy/ci/out/
+            compose-logs.txt
+          if-no-files-found: warn

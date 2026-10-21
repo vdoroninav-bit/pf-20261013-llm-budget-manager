@@ -403,6 +403,48 @@ async def test_4_5_money_fields_and_assignee_are_immutable(
     )
 
 
+async def test_4_5_end_in_past_is_rejected(
+    client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection
+) -> None:
+    """3Б2: закрыть задним числом нельзя (стёрло бы амортизацию прошедших дней) — 422, подписка не меняется."""
+    dep = await seed.department("Разработка", limits={"month": 3_000_000})
+    key = await service_key(seed, dep)
+    csrf = await admin_client_login(client, seed)
+    sub = await create_sub(client, csrf, sub_body("department", dep, seats=1, seat_price="3100"))
+    resp = await client.patch(
+        f"/api/v1/subscriptions/{sub['id']}", json={"end_date": "2026-10-13"}, headers=csrf
+    )  # сегодня по МСК — 14.10
+    assert resp.status_code == 422, f"{resp.status_code} {resp.text[:300]}"
+    assert_matches_contract(resp, "endSubscription")
+    end_date = await db.fetchval("SELECT end_date FROM subscription WHERE id = $1", UUID(sub["id"]))
+    assert end_date is None
+    assert subs(await balance(client, key, login=None), "department", "month") == "1400.00"
+
+
+async def test_4_5_reopening_ended_subscription_is_rejected(
+    client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection, clock: FrozenClock
+) -> None:
+    """3Б2: подписку, которая уже закончилась, нельзя продлить или открыть заново — 422, end_date не меняется."""
+    dep = await seed.department("Разработка", limits={"month": 3_000_000})
+    csrf = await admin_client_login(client, seed)
+    sub = await create_sub(client, csrf, sub_body("department", dep, seats=1, seat_price="3100"))
+    closed = await client.patch(
+        f"/api/v1/subscriptions/{sub['id']}", json={"end_date": "2026-10-14"}, headers=csrf
+    )
+    assert closed.status_code == 200, closed.text
+
+    clock.set(msk(2026, 10, 20, 12))  # подписка закончилась 14.10
+    csrf = await relogin(client)
+    for end_date in ("2026-10-31", "2026-10-20"):
+        resp = await client.patch(
+            f"/api/v1/subscriptions/{sub['id']}", json={"end_date": end_date}, headers=csrf
+        )
+        assert resp.status_code == 422, f"{end_date}: {resp.status_code} {resp.text[:300]}"
+        assert_matches_contract(resp, "endSubscription")
+    stored = await db.fetchval("SELECT end_date FROM subscription WHERE id = $1", UUID(sub["id"]))
+    assert str(stored) == "2026-10-14"
+
+
 # ---------------------------------------------------------------- 4.6 не распределено
 
 

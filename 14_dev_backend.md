@@ -589,3 +589,87 @@ make lint → Contracts: 3 kept, 0 broken; ruff: E501 deploy/ci/check_licenses.p
 ### Вопросы техлиду
 1. `make test` красный у всех исполнителей из-за `test_compose_static.py` (DevOps), то же, что вопрос 1 Backend 1. Принимается ли готовность T073 с этим единственным посторонним падением?
 2. Пункт 2 «Отклонений»: устраивают ли повторы внутри такта, или нужны попытки в разных тактах (колонка `webhook_attempts`, миграция 0002)?
+
+## 2026-10-21 — Backend 2: T096 (админка из образа и бюджет такта webhook; 14_tech_rulings.md, пакет 4, 4Д6 и 4Б4)
+
+**Статус:** T096 — `[x]` по `make test`. Часть готовности «`compose_only`-тест `test_admin_spa_served_from_image` в журнале CI для релизного SHA» в этой среде не проверить: Docker нет, она подтверждается в T092.
+
+### Что сделано
+- **Раздача админки (4Д6), `bm/main.py`.**
+  - Новая константа `ADMIN_STATIC_DIR = Path("/app/static/admin")`. Новый параметр `create_app(..., admin_dir=ADMIN_STATIC_DIR)`. Переменной окружения нет.
+  - Каталог есть — монтируется `StaticFiles(directory=admin_dir, html=True)` на `/admin`. Каталога нет — монтирования нет, в журнал пишется одна строка `info` `admin_static_disabled`, API работает.
+  - `StaticFiles` импортируется из `fastapi.staticfiles` (это реэкспорт Starlette). Новых зависимостей нет, `uv.lock` не менялся.
+  - Как ведут себя пути: `/admin` → 307 на `/admin/`; `/admin/` отдаёт `index.html` (`text/html`); ассеты отдаются по `base: '/admin/'`; отсутствующий файл → 404, подмены на `index.html` нет.
+  - Контрактный тест T015 строит маршруты из `app.openapi()`, а в эту схему `Mount` не попадает. Поэтому исключать что-то из сверки не понадобилось, и это закреплено отдельным тестом `test_static_mount_not_in_contract_schema`.
+- **Бюджет такта webhook (4Б4), `bm/notify/channels.py`.**
+  - Новая константа модуля `TICK_BUDGET_S = 30.0`.
+  - У `Webhook` новый параметр `monotonic` (по умолчанию `time.monotonic`), его можно подменить в тестах.
+  - Как работает `deliver_pending`: время старта такта фиксируется до создания клиента. Перед каждым уведомлением проверяется `elapsed ≥ 30 с` → `break`. Уведомление, которое уже начали отправлять, доводится до конца. Необработанные остаются `pending`, по ним пишется строка `info` `webhook_tick_budget` с их числом.
+  - HTTP-запрос и раньше выполнялся вне транзакции: соединение берётся только на `SELECT` очереди и на `UPDATE` статуса (autocommit), перед `send` оно возвращено в пул. Код переносить не пришлось, это закреплено тестом (см. ниже).
+
+### Тесты (TDD: красная фаза → зелёная)
+- `tests/integration/test_admin_static.py` (новый, 15 тестов):
+  - `/admin/` → 200 `text/html`; `/admin/assets/app.js` → 200; `/admin` → 307 на `/admin/`;
+  - `/admin/nope.js` и `/admin/departments/1` → 404;
+  - `/admin/../bm/settings.py` через httpx → 404;
+  - 5 сырых ASGI-путей в обход нормализации httpx (`..`, `%2e%2e`, `assets/../../`, `..%2f`) к файлам рядом с каталогом → 404, содержимое не отдаётся;
+  - `/healthz`, `/readyz`, `/metrics` и `/api/v1/auth/me` (401 `problem+json`) работают;
+  - без каталога: `/admin/` → 404, `/healthz` → 200, в журнале ровно одна строка `info`;
+  - значение `admin_dir` по умолчанию — `/app/static/admin`.
+- `tests/integration/test_webhook.py`, добавлено 3 теста. Часы `FakeTime`: пауза и каждая попытка (через новый хук `Receiver.on_request`) двигают монотонные часы на `TIMEOUT_S`, реального ожидания нет.
+  - Получатель отвечает 500, в очереди 5 `pending`. Одно уведомление занимает 3×5 + 1 + 2 = 18 с. Такт 1 обрабатывает 2 уведомления (в 36 с: второе начато в 18 с и доведено до конца), остаются 3 `pending`. Такты 2 и 3 обрабатывают 2 и 1. В итоге все 5 `failed`, запросов 15.
+  - В момент каждого HTTP-запроса в `pg_stat_activity` нет соединений в состоянии `idle in transaction`. Мутационная проверка: если обернуть `send` в `conn.transaction()`, тест падает (`{1} == {0}`); код после проверки восстановлен.
+  - Быстрый получатель: уходят все 5 за такт.
+  - Граница: ровно 30 с к началу следующего уведомления → оно не берётся.
+- Красная фаза: `6 failed, 9 passed, 12 errors`. Причины — `TypeError` (нет `admin_dir` и `monotonic`) и отсутствие `ADMIN_STATIC_DIR` и `TICK_BUDGET_S`.
+
+### Команды и вывод
+```
+$ DATABASE_URL=postgresql://bm:bm@127.0.0.1:5432/bm_test_b2 SKIP_FRONTEND=1 make test
+======================= 766 passed in 454.06s (0:07:34) ========================
+Contracts: 3 kept, 0 broken.
+vitest: пропущен (SKIP_FRONTEND=1)
+run-tests.sh full: OK          (exit 0)
+
+$ make lint
+ruff check: All checks passed!
+ruff format --check: 1 file would be reformatted — tests/unit/test_settings.py   (exit 2)
+Contracts: 3 kept, 0 broken.
+```
+`make lint` красный, и только из-за `tests/unit/test_settings.py`. Это файл Backend 1, который сейчас идёт в T097, его я не трогал. Мои файлы проходят `ruff check` и `ruff format --check`.
+
+### Отклонения
+- Тест «HTTP-запрос вне транзакции» проверяет `pg_stat_activity`, а не перехватывает соединения пула. Так проверяется само требование: нет открытой транзакции на время запроса.
+- В `Receiver` из `test_webhook.py` добавлен необязательный хук `on_request`. Остальные тесты файла его не используют.
+
+### Для DevOps (4Д9, п. 3)
+В `admin-guide.md` §10 можно писать: «за такт отправляется не больше уведомлений, чем укладывается в 30 с; начатое уведомление доводится до конца (до ≈ 48 с), остальные — в следующем такте».
+
+### Вопросы техлиду
+1. Подтвердите, что T096 закрыта по `make test`, а проверка `compose_only` переходит в T092. Если нет — верните T096 в `[ ]`.
+
+## 2026-10-21 — Backend 1: T097 (`IMPORT_HTTPS_PROXY_FILE`; 14_tech_rulings.md, пакет 4, 4Д4)
+
+### Что сделано
+- `bm/settings.py`: `import_https_proxy` добавлен в `_FILE_SECRETS`, новое поле `import_https_proxy_file: Path | None`.
+- Чтение `<ИМЯ>_FILE` перенесено из `after`-валидатора в `before`-валидатор (вместе с правилом «пусто — не задано»). Поэтому:
+  - файл имеет приоритет над `<ИМЯ>`, пустой файл означает «не задано» (прямой выход);
+  - проверка схемы `http(s)://` (`_proxy_url`) действует и для значения из файла. Раньше файлы читались после валидаторов полей, и значение из файла прошло бы без проверки [Факт по коду];
+  - если файл указан, но не читается (нет файла, нет прав, каталог), старт падает с ошибкой `IMPORT_HTTPS_PROXY_FILE: не удалось прочитать файл <путь> (FileNotFoundError); …`. Значения секретов в тексте нет, путь показывается (это не секрет).
+- Попутно найден и закрыт тестом дефект: обязательный `session_secret` нельзя было передать **только** через `SESSION_SECRET_FILE` — pydantic падал с `Field required` раньше, чем читался файл [Факт: проверено запуском до правки]. А compose передаёт `api`/`worker` именно `SESSION_SECRET_FILE` (`deploy/docker-compose.yml:26`). Теперь работает (`test_session_secret_from_file_only`).
+- Тесты: `tests/unit/test_settings.py` (+5 функций: приоритет файла, пустой файл, схема из файла ×3, файла нет, `SESSION_SECRET_FILE` без `SESSION_SECRET`); `tests/security/test_no_egress.py` (+3: прокси из файла у `anthropic`/`openai`, у `webhook` его нет, пароль прокси из файла не попадает в журнал и соединение идёт только к прокси).
+
+### Команды и вывод (сокращённо)
+- Красная фаза: `pytest tests/unit/test_settings.py tests/security/test_no_egress.py` → `9 failed, 47 passed` (тесты пустого файла и webhook до правки зелёные, так и должно быть).
+- Зелёная: тот же набор → `56 passed`.
+- `DATABASE_URL=…/bm_test_b1 SKIP_FRONTEND=1 make test` → `766 passed in 333.89s`, `Contracts: 3 kept, 0 broken`, `run-tests.sh full: OK`. Первый прогон дал 5 failed и 12 errors в `test_admin_static.py`/`test_compose_static.py`: Backend 2 и DevOps в это время правили свои зоны. Отдельный прогон этих файлов → `53 passed`, повторный полный прогон зелёный.
+- `make lint` → `Contracts: 3 kept, 0 broken`, `All checks passed!`, `165 files already formatted`.
+
+### Отклонения
+- Кроме добавления в `_FILE_SECRETS` изменён порядок чтения файлов (`before` вместо `after`). Без этого не выполнить требование «проверка схемы для значения из файла». Поведение для остальных секретов прежнее, плюс исправлен `SESSION_SECRET_FILE`.
+
+### Для DevOps (T087/T090)
+- В `deploy/docker-entrypoint.sh` переменная `IMPORT_HTTPS_PROXY_FILE` уже добавлена в цикл снятия пустых `*_FILE` [Факт: видно в текущем файле]. Это обязательно: без этого при пустом прокси (compose файл не создаёт) старт `worker` падал бы с новой ошибкой «не удалось прочитать файл».
+
+### Вопросы техлиду
+1. Принять исправление `SESSION_SECRET_FILE` в рамках T097 или оформить его отдельной строкой в `16_release.md` как найденный дефект поставки?

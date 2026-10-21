@@ -9,7 +9,7 @@
 | T001 | Каркас репозитория и команд | **Готово** в рамках среды: `make test` и `make test-unit` дают exit 0 без Docker. Docker-цели написаны, но не запускались: Docker Hub недоступен | Вывод ниже |
 | T088 | SDL-проверки | **Готово (2026-10-21)**, Trivy — НЕ ПРОВЕРЕНО (только CI) | Раздел «2026-10-21» ниже |
 | T087 | Полная поставка | **Проверено локально** (`[ ]` до журнала CI) | Раздел «2026-10-21» ниже |
-| T092 | CI GitHub Actions | **Написан, синтаксис проверен** (`[ ]` до журнала CI) | Раздел «2026-10-21» ниже |
+| T092 | CI GitHub Actions | **Прогон `eb17642`: test — PASS, delivery — FAIL на up/smoke (вероятно 4Д6)**; добавлены аннотации (`[ ]` до релизного SHA) | Раздел «пакет 4» ниже |
 | T090 | Руководство администратора | **Готово к приёмке** (`[ ]` до приёмки техлидом и прогона QA) | `docs/admin-guide.md` |
 
 Оговорка: T088 зависит только от T001, поэтому сделан сразу. npm-часть заработает на реальном фронтенде после T002, Trivy — после T087 (образ) и установки trivy.
@@ -399,3 +399,109 @@ $ make lint   → Contracts: 3 kept, 0 broken. / All checks passed! / 161 files 
 3. Разрешить ли `actions/upload-artifact` для SBOM (отклонение 2)?
 4. Нужен ли `IMPORT_HTTPS_PROXY_FILE` (backend, `Settings`), чтобы учётные данные прокси не лежали в окружении контейнера?
 5. Можно заранее, до CI, проверить compose-стек целиком на образах, собранных из файлов хоста (`docker import`; так уже проверены secrets и tmpfs). Статус будет PASS-замена, не PASS, работы примерно на 0,5 дня. Делать?
+
+---
+
+## 2026-10-21 — пакет 4: разбор CI `eb17642`, аннотации, 4Д1, 4Д3, 4Д4, 4Д8, 4Д9 (T087, T092, T090)
+
+Среда: Docker 29.8.2 / Compose 5.5.1, реестры 403 (образ локально не собрать). PostgreSQL 16.15, БД `bm_test_devops`.
+
+### Итог
+
+| ID | Отметка | Что изменилось |
+|---|---|---|
+| T092 | `[ ]` | CI диагностируется через аннотации: `deploy/ci/gha.py` (`::error` с хвостом вывода или сводкой pytest, `::notice` со сводкой гейтов и digest), гейты разнесены по отдельным шагам, `upload-artifact`, base64-дамп SBOM убран. `actionlint` — 0 ошибок. Закрытие — по аннотациям/журналу релизного SHA |
+| T087 | `[ ]` | `IMPORT_HTTPS_PROXY` — compose secret только у `worker` (4Д4); `start_interval: 2s` у healthcheck, `--wait-timeout 180`; `BM_COMPOSE` без `DATABASE_URL` для smoke/failover. Digest базовых образов — не закреплён [Гипотеза], CI печатает его в `::notice` |
+| T090 | `[ ]` | Правки 4Д9 (1)–(6) в `docs/admin-guide.md`. Чистая машина — НЕ ПРОВЕРЕНО (4Д9) |
+
+`make test` (БД `bm_test_devops`): **766 passed; import-linter 3 kept; frontend 28 файлов / 363 теста passed; `run-tests.sh full: OK`, EXIT=0.**
+
+### Разбор прогона 39552101693 (`eb17642`) — статусы гейтов (репетиция, в релиз как PASS не идут, 4Д1)
+
+| Гейт | Статус на `eb17642` | Основание |
+|---|---|---|
+| `make lint`, `make compose-check`, `make test` на PostgreSQL 18, frontend (Node 24) | PASS (репетиция) | [Факт] задача `test` — SUCCESS |
+| `actions/checkout@v5` | разрешается | [Факт] задача `test` прошла checkout; пометка [Гипотеза] снята |
+| `make build` (образ из настоящих базовых образов), шаг digest | PASS (репетиция) | [Вывод] шаги идут по порядку, упал следующий за ними шаг |
+| `make up && make smoke && make backup && make restore && make smoke` | **FAIL**, подшаг неизвестен | [Факт] exit 2 — так `make` сообщает об ошибке любого рецепта, поэтому код не различает подшаги. Аннотация «.github, строка 152» — [Вывод] стандартная аннотация раннера «Process completed with exit code 2», на подшаг не указывает |
+| `make failover`, `CHECK_STRICT=1 make check` (Trivy), `egress-host-check` | НЕ ПРОВЕРЕНО | [Факт] skipped |
+
+**Вероятная причина падения (статически):**
+1. **[Вывод, основная] Первый `make smoke` падает на `test_admin_spa_served_from_image`**: `GET /admin/` → 404, в `bm.main` на `eb17642` нет `StaticFiles` (4Д6). В текущем дереве монтирования тоже ещё нет (T096 у Backend 2 в работе). Это ожидаемое падение, его снимает T096, а не CI: тест не ослабляю.
+2. [Гипотеза] `make up --wait --wait-timeout 120` впритык: первые проверки healthcheck шли через `interval` (у `worker` 30 с, у `backup` 60 с) после старта, а `worker` стартует только после healthy `api`. Оценка — около 70 с при 120 с лимита. Исправлено: `start_interval: 2s` у всех четырёх сервисов (нужен Docker Engine ≥ 25 [Гипотеза]: версию раннера теперь печатает `::notice`), `--wait-timeout 180` в `up` и `restore`.
+3. [Гипотеза] Пустые секреты (`ANTHROPIC_ADMIN_KEY` и др.): то, что compose не создаёт файл для пустой переменной, проверено только на Compose 5.5.1. Entrypoint обрабатывает и отсутствующий, и пустой файл (`-s`); если версия на раннере ведёт себя иначе, это покажет аннотация «состояние стека».
+4. [Вывод, мелочь] smoke и failover вызывали `docker compose` с тестовым `DATABASE_URL` из окружения `make`. Для `ps/exec/stop/start` это безвредно, но при пересоздании контейнера подменило бы БД стека. Теперь Makefile экспортирует `BM_COMPOSE=$(COMPOSE_MAIN)` (с `env -u DATABASE_URL`).
+
+Код приложения не менялся.
+
+### Что сделано (файлы)
+
+| Файл | Что |
+|---|---|
+| `deploy/ci/gha.py` (новый, stdlib) | `run --title T [--stack] -- cmd`: вывод в журнал и в `deploy/ci/out/gha/<шаг>.log`; код выхода — как у команды; при падении — `::error title=T (exit N)::<хвост>`. Если в выводе есть сводка pytest (`short test summary info`), в аннотацию идёт она, а не хвост. Перевод строки экранируется как `%0A`, а также `%`, `\r`; в title ещё `:` и `,`. ≤ 4000 байт UTF-8 без разрыва символа. `--stack` — вторая аннотация «состояние стека»: `compose ps -a` и `logs --tail 40` сервисов не в состоянии running/healthy. Бюджет — ≤ 10 аннотаций на задачу, 2 из них оставлены под notice (счётчик в файле). Маскирование: значения `POSTGRES_PASSWORD`, `SESSION_SECRET`, `ADMIN_INITIAL_PASSWORD`, `BM_ADMIN_PASSWORD`, ключей и прокси из `deploy/.env` и окружения печатаются как `::add-mask::` до первой аннотации и заменяются на `***`; пароль в URL (`://u:p@`) тоже. `notice` — stdin → `::notice`. `summary` — гейты (`gates.tsv`), исходы шагов (`STEPS_JSON = toJSON(steps)`), sha256 SBOM, не-OK строки `summary.txt` make check → одна `::notice` |
+| `tests/deploy/test_ci_annotations.py` (новый, 12 тестов) | Красная фаза: модуля не было. Проверяется: проход без аннотаций; падение → один `::error` с экранированием и тем же кодом; экранирование title; обрезка до 4 КБ UTF-8; приоритет сводки pytest; маскирование (из файла, окружения, URL) и порядок `add-mask` → `error`; бюджет 10 (11-я не печатается); аннотация состояния стека (логи только нездоровых сервисов); сводка с шагами, sha256 и FAIL из `summary.txt`; ошибки использования → exit 2 |
+| `.github/workflows/ci.yml` | Каждый гейт — отдельный шаг через `gha.py run`: `make lint`, `compose-check`, `test`, frontend; `build`, `up`, `smoke`, `backup`, `restore`, `smoke после restore`, `failover`, `check`, `egress` (попытка). Зависимые шаги — через `if: !cancelled() && steps.<id>.outcome == 'success'`: smoke/backup/failover/egress — после `up`, restore — после backup, check — после build. Поэтому один прогон показывает статус каждого гейта, а задача остаётся красной. Пароли стенда генерируются в переменные, маскируются `::add-mask::` до записи в `deploy/.env` (раньше маскировался только `BM_ADMIN_PASSWORD`). Шаг «Версии и digest базовых образов» (`python:3.13-slim`, `node:24-slim`, `postgres:18`, `aquasec/trivy:0.58.0`, версии docker и compose) → `::notice`. В задаче `test` — `::notice` с версиями (uv, docker, compose, `SHOW server_version` PostgreSQL). В конце каждой задачи — сводка `::notice`. `actions/upload-artifact@v4` [Гипотеза: версия не проверена, API GitHub из сессии — 403]: `delivery-<sha>` (`deploy/ci/out/` — SBOM, `summary.txt`, журналы гейтов; `compose-logs.txt`), `test-<sha>` (журналы гейтов). Base64-дамп SBOM убран, sha256 SBOM и `summary.txt` остаются в журнале (4Д3) |
+| `deploy/docker-compose.yml` | 4Д4: секрет `import_https_proxy` (источник — `IMPORT_HTTPS_PROXY`) только у `worker`, `IMPORT_HTTPS_PROXY_FILE=/run/secrets/import_https_proxy`, переменной `IMPORT_HTTPS_PROXY` в окружении больше нет. `start_interval: 2s` у healthcheck всех сервисов |
+| `deploy/docker-entrypoint.sh` | `IMPORT_HTTPS_PROXY_FILE` снимается, если файла нет или он пуст (прямой выход), как у ключей провайдеров |
+| `deploy/.env.example` | `IMPORT_HTTPS_PROXY` — в списке секретов, комментарий: передаётся только `worker` файлом через `IMPORT_HTTPS_PROXY_FILE`. Комментарий к `WEBHOOK_URL` — без «имя проверяется только при старте», добавлено «127/8 — это сам контейнер worker» |
+| `tests/deploy/test_compose_static.py` | Прокси добавлен в секреты-метки: значения нет в отрендеренной конфигурации, источник секрета — переменная окружения. Новый `test_import_https_proxy_passed_to_worker_as_secret_file`: у `worker` есть `_FILE`, нет `IMPORT_HTTPS_PROXY`, в окружении нет `proxy-pass`; у `api`, `postgres` и `backup` нет ни переменной, ни секрета. Новый `test_entrypoint_drops_proxy_file_when_secret_is_empty`. Шаблон упоминает `IMPORT_HTTPS_PROXY_FILE`. Красная фаза: 6 failed, 32 passed → после правок 61 passed (весь `tests/deploy`) |
+| `Makefile` | `BM_COMPOSE ?= $(COMPOSE_MAIN)` (экспорт), `--wait-timeout 180` в `up` и `restore`, `pytest tests/failover -v -ra` (сводка причин для аннотации) |
+| `deploy/Dockerfile` | Комментарий: digest не закреплён [Гипотеза] — реестры 403, журнал `eb17642` недоступен, digest придёт в `::notice`. Теги не менялись |
+| `docs/admin-guide.md` (4Д9) | (1) §9: абзац про незакрытую T062 удалён. (2) §10: «Webhook входит в v1», оговорка про 🔻2 убрана. (3) §10: адрес проверяет `bm.egress` в начале каждого такта, отказ — `job_run.error_class=EgressForbidden`, уведомления остаются `pending`; DNS rebinding между проверкой и соединением не контролируется. [Факт по коду] `deliver_pending` создаёт клиент `get_client("webhook")` в каждом такте, `_resolve` — `getaddrinfo`. Бюджет 30 с за такт — [Факт по коду] `TICK_BUDGET_S = 30.0` в `bm/notify/channels.py` (T096, Backend 2). (4) §10: `127.0.0.0/8` — это сам `worker`. (5) §14: пункт 10 «Единицы сумм импорта» (4Б1) и примечание, что CI его не проверяет. (6) §4 и §9: `IMPORT_HTTPS_PROXY` — файл-секрет, только у `worker`. Плюс в §14: аннотации CI заменяют журнал |
+
+### Команды готовности и вывод
+
+```
+$ uv run … pytest tests/deploy/test_ci_annotations.py          (до gha.py: модуля нет → все падают)
+12 passed in 3.31s
+$ uv run … pytest tests/deploy/test_compose_static.py          (красная фаза 4Д4)
+6 failed, 32 passed      → после правок compose/entrypoint/.env.example:
+$ uv run … pytest tests/deploy -q
+61 passed in 5.96s
+$ actionlint -verbose .github/workflows/ci.yml                  (actionlint-py + shellcheck-py)
+verbose: Found 0 parse errors … / Found total 0 errors          rc=0
+$ shellcheck -S warning deploy/docker-entrypoint.sh             rc=0
+$ python3 deploy/ci/gha.py run --stack --title "make up" -- sh -c 'echo нет образа; exit 2'   (без стека)
+::error title=make up (exit 2)::нет образа
+::error title=make up%3A состояние стека::couldn't find env file: …/deploy/.env%0A--- logs (api, worker) ---%0A…
+$ STEPS_JSON='{"up":{"outcome":"failure"}}' python3 deploy/ci/gha.py summary
+::notice title=Сводка CI::Гейты:%0A  make compose-check: PASS (5 с)%0A  make up: FAIL (exit 2, 0 с)%0AШаги: up: failure%0Asbom-npm.cdx.json sha256=3ba7…%0A…
+$ DATABASE_URL=postgresql://bm:bm@127.0.0.1:5432/bm_test_devops make test
+======================= 766 passed in 305.19s (0:05:05) ========================
+Contracts: 3 kept, 0 broken.
+ Test Files  28 passed (28)
+      Tests  363 passed (363)
+run-tests.sh full: OK                                            EXIT=0
+$ make lint
+E501 app/backend/bm/main.py:53, app/backend/bm/notify/channels.py:10, :12   → Error 1   (не моя зона, см. ниже)
+```
+Мои файлы (`deploy/`, `tests/deploy/`) — `ruff check` и `ruff format --check` чистые.
+
+### Отклонения
+
+1. **Digest базовых образов не закреплён (4Д1 (2)).** Реестры 403, журнал недоступен. Теги остались, пометка [Гипотеза] — в Dockerfile. Digest будет в аннотации `::notice` «Версии и digest базовых образов» следующего прогона; перенос в `ARG …=python:3.13-slim@sha256:…` — одна правка после прогона.
+2. **Цепочка `up && smoke && backup && restore && smoke` разнесена по шагам**, и после упавшего smoke шаги backup/restore/failover/check всё равно выполняются. Порядок команд прежний, а задача остаётся красной при любом FAIL. Зачем: на `eb17642` одно ожидаемое падение (4Д6) скрыло статусы остальных гейтов.
+3. **Связка с T097.** В начале моей работы в `_FILE_SECRETS` не было `import_https_proxy`, а `IMPORT_HTTPS_PROXY_FILE` попадал бы в `extra="ignore"`. К концу работы Backend 1 добавил его в рабочее дерево [Факт: `bm/settings.py`, строка `"import_https_proxy",  # T097`]. Compose-правка 4Д4 работает только вместе с T097 — выпускать на одном SHA.
+4. **`start_interval` требует Docker Engine ≥ 25** [Гипотеза]. Если на раннере движок старше и compose отклонит ключ, это покажет аннотация `make up` (exit 1, текст ошибки compose). Тогда ключ убирается.
+5. 4Д8: (4) смена пароля в smoke и (5) `backup` от root — приняты как есть, без изменений.
+
+### Нужны правки в коде (не моя зона)
+
+1. **Backend 2 (T096):** на момент моего `make lint` он красный, E501 (> 110 символов): `bm/main.py:53`, `bm/notify/channels.py:10` и `:12`. Это файлы T096 в работе. Если так и уйдёт в push, в CI упадёт шаг `make lint`.
+2. **Backend 2 (T096):** к концу моей работы в рабочем дереве появилось монтирование `/admin` (`StaticFiles`, `bm/main.py`). Мой `make test` шёл параллельно с их правками, поэтому какая версия `main.py` в нём проверена, не гарантирую. Без T096 smoke в CI останется FAIL.
+3. **Backend 1 (T097):** см. отклонение 3.
+
+### Что проверить в следующем прогоне CI (по аннотациям)
+
+- `::notice` «Сводка CI test» / «Сводка CI delivery»: PASS/FAIL каждого гейта и исходы шагов;
+- `::error title=make smoke (exit 2)`: должна остаться только строка `FAILED …test_admin_spa_served_from_image` (если T096 не вошёл) или аннотации нет;
+- `::error … состояние стека`: все 4 сервиса `running healthy`, иначе — журнал сервиса;
+- `make backup`, `make restore`, `make smoke после restore`, `make failover`, `CHECK_STRICT=1 make check` (Trivy 0 critical, тег `aquasec/trivy:0.58.0` разрешается), попытка `egress-host-check`: у каждого есть статус;
+- `::notice` «Версии и digest базовых образов» → закрепить digest в Dockerfile; версия Docker Engine ≥ 25 (для `start_interval`);
+- `::notice` «Версии (test)»: `postgres 18.x`;
+- в аннотациях нет значений паролей (только `***`); `actions/upload-artifact@v4` разрешился (артефакты `test-<sha>`, `delivery-<sha>` есть в API).
+
+### Вопросы техлиду
+
+1. T096 и T097 — выпускать вместе с этими правками на релизном SHA? Иначе smoke останется FAIL (4Д6), а прокси из файла не прочитается (отклонение 3).
+2. Устраивает ли разнесение цепочки по шагам (отклонение 2) как форма гейта «`make up && make smoke && make backup && make restore && make smoke`»? Порядок и команды прежние.

@@ -28,6 +28,7 @@ from tests.contract.helpers import assert_matches_contract
 from tests.fixtures.imports import cost_line, provider_source, recorded, run_import
 from tests.fixtures.qa import (
     admin_client_login,
+    bump_config,
     catalog,
     decide,
     decision_body,
@@ -43,14 +44,8 @@ from tests.fixtures.seed import Emp, Seed
 
 pytestmark = pytest.mark.db
 
-# T071 реализована; оставшиеся точечные xfail — не в коде отчётов (14_dev_backend.md, Backend 2, вопросы техлиду).
-SEED_DEFECT = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Дефект засева (QA): сотрудники user1, user2 засеяны после первого решения без bump_config — "
-    "снимок конфигурации их не видит (subject_unknown). Проверка CSV-инъекции покрыта "
-    "tests/integration/test_reports.py::test_csv_neutralizes_formula_prefixes",
-)
+# Дефект засева test_6_2_csv_injection_is_neutralized (3Б5) исправлен в T093: после засева user1, user2
+# вызывается bump_config, точечный xfail снят.
 # Дефект T061 (3Б6) исправлен в T062: источники пишут аудит со временем часов приложения
 # (tests/integration/test_provider_sources_audit.py). 3Б7 закрыт в T073 (Backend 2): все записи аудита —
 # по часам приложения (tests/integration/test_audit_clock.py), пометка снята.
@@ -227,7 +222,6 @@ async def test_6_2_finance_viewer_csv_without_employee_identifiers(
         assert change.status_code == 403  # изменять настройки финансист не может
 
 
-@SEED_DEFECT
 async def test_6_2_csv_injection_is_neutralized(
     client: httpx.AsyncClient, seed: Seed, db: asyncpg.Connection
 ) -> None:
@@ -238,6 +232,9 @@ async def test_6_2_csv_injection_is_neutralized(
     _, key = await seed.caller_key()
     for i, dep in enumerate((evil, at, plus)):
         await seed.employee(f"user{i}", department=dep)
+        if i:
+            # после первого решения снимок конфигурации перечитывается только по config_version (T018, 3Б5)
+            await bump_config(db)
         d = await decide(client, key, decision_body(login=f"user{i}", model="-2+3"))
         await report(client, key, usage_body(d["decision_id"], 1000, 400))
     await admin_client_login(client, seed)

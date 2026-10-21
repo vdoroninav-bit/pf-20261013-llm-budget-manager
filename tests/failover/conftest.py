@@ -1,14 +1,19 @@
-"""Отказные тесты SC-002 и SC-003 (T032): против поднятого стека docker compose.
+"""Отказные тесты SC-002 и SC-003 (T032, T093): против поднятого стека.
 
-Запуск: `make up && make failover`. Цель `failover` ставит BM_FAILOVER=1. Без неё (в `make test`,
+Запуск: `make up && make failover` (docker compose) или `make up-local && BM_STACK=local make failover`
+(стек из локальных процессов, 14_tech_rulings.md, пакет 3, 3Д1(в); драйвер — tests/failover/stack.py). Цель `failover` ставит BM_FAILOVER=1. Без неё (в `make test`,
 `pytest --collect-only`, обычном `pytest`) тесты пропускаются с причиной — Docker и стек им обязательны.
 Если BM_FAILOVER=1, но стека нет, тест ПАДАЕТ (а не пропускается): гейт релиза не должен молча зеленеть.
 
 Переменные окружения:
-  BASE_URL            адрес API (по умолчанию http://127.0.0.1:8080)
+  BM_STACK            compose (по умолчанию) | local
+  BASE_URL            адрес API (по умолчанию http://127.0.0.1:8080; local — из `deploy/local/stack.sh env`)
+  DATABASE_URL        BM_STACK=local: кластер стека для проверки report_key (из `stack.sh env`; не 5432)
+  BM_LOCAL_STACK      BM_STACK=local: путь к stack.sh (по умолчанию deploy/local/stack.sh)
+  BM_ENV_FILE         файл переменных стека (compose: deploy/.env; local: deploy/local/.state/stack.env)
   BM_COMPOSE          команда compose (по умолчанию «docker compose -f deploy/docker-compose.yml --env-file deploy/.env»)
   BM_ADMIN_LOGIN      учётная запись админки для подготовки данных (по умолчанию ADMIN_INITIAL_LOGIN из deploy/.env)
-  BM_ADMIN_PASSWORD   её пароль (по умолчанию ADMIN_INITIAL_PASSWORD из deploy/.env); пароль уже сменён — задайте явно
+  BM_ADMIN_PASSWORD   пароль после смены; при первом входе временный ADMIN_INITIAL_PASSWORD сменяется на него
   BM_PG_USER, BM_PG_DB  пользователь и БД в контейнере postgres для проверки (по умолчанию bm / bm)
 """
 
@@ -24,7 +29,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 ENABLED = os.environ.get("BM_FAILOVER") == "1"
 SKIP_REASON = (
-    "отказные тесты SC-002/SC-003 требуют Docker и поднятого стека: запуск через `make up && make failover`"
+    "отказные тесты SC-002/SC-003 требуют поднятого стека: `make up && make failover` "
+    "или `make up-local && BM_STACK=local make failover`"
 )
 
 # Эталонный клиент (T033) лежит в app/client/budget_client; до установки пакета — через sys.path.
@@ -69,7 +75,7 @@ def egress_guard(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[Any]]:
 
 @pytest.fixture(scope="session")
 def stack() -> None:
-    """Предусловия: Docker доступен, compose-файл есть, API отвечает на readyz. Иначе — FAIL, не skip."""
+    """Предусловия: стек (compose или local) запущен, API отвечает на readyz. Иначе — FAIL, не skip."""
     from tests.failover.stack import check_stack
 
     check_stack()

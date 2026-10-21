@@ -5,7 +5,9 @@
 - тело — JSON с полями `id`, `kind`, `department_id`, `period`, `period_start`, `message`, `created_at`,
   без идентификаторов сотрудников;
 - `WEBHOOK_URL` пуст → `disabled`, задачи доставки нет, 0 соединений;
-- публичный адрес → отказ `egress` (EgressForbidden), 0 соединений, уведомления остаются `pending`.
+- публичный адрес → отказ `egress` (EgressForbidden), 0 соединений, уведомления остаются `pending`;
+- T096 (4Б4): бюджет такта 30 с — следующее уведомление не берётся, если с начала такта прошло ≥ 30 с
+  (монотонные часы); начатое доводится до конца; HTTP-запрос — вне открытой транзакции БД.
 
 Получатель — локальный HTTP-сервер на 127.0.0.1 (порт временно добавляется в список разрешённых
 соединений `egress_guard` из tests/conftest.py).
@@ -13,7 +15,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, get_args
@@ -42,6 +44,7 @@ class Receiver:
     port: int = 0
     statuses: list[int] = field(default_factory=list)
     requests: list[dict[str, Any]] = field(default_factory=list)
+    on_request: Callable[[], Awaitable[None]] | None = None  # вызывается до ответа (T096: часы, транзакции)
 
     @property
     def url(self) -> str:
@@ -54,6 +57,8 @@ class Receiver:
         headers = {k.strip().lower(): v.strip() for k, v in (h.split(":", 1) for h in lines[1:] if ":" in h)}
         body = await reader.readexactly(int(headers.get("content-length", "0")))
         self.requests.append({"method": method, "path": path, "headers": headers, "body": body})
+        if self.on_request is not None:
+            await self.on_request()
         status = self.statuses.pop(0) if self.statuses else 200
         writer.write(f"HTTP/1.1 {status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".encode())
         await writer.drain()
@@ -232,3 +237,96 @@ async def test_webhook_job_failure_recorded_in_job_run(app: Any, db: asyncpg.Con
     await Scheduler(app.state.pool, default_jobs(app.state.budget, settings), app.state.clock).tick()
     row = await db.fetchrow("SELECT ok, error_class FROM job_run WHERE job = 'webhook'")
     assert row is not None and row["ok"] is False and row["error_class"] == "EgressForbidden"
+
+
+# ---------------------------------------------------------------- T096: бюджет времени такта (4Б4)
+
+
+async def _queue(db: asyncpg.Connection, seed: Seed, n: int) -> list[UUID]:
+    """n уведомлений `pending` в разных подразделениях; id — в порядке очереди доставки."""
+    for i in range(n):
+        await _notification(db, await seed.department(f"Отдел {i}"))
+    return [r["id"] for r in await db.fetch("SELECT id FROM notification ORDER BY created_at, id")]
+
+
+class FakeTime:
+    """Монотонные часы и пауза без реального ожидания: пауза и каждая попытка двигают часы."""
+
+    def __init__(self) -> None:
+        self.t = 1000.0
+
+    def monotonic(self) -> float:
+        return self.t
+
+    async def sleep(self, s: float) -> None:
+        self.t += s
+
+
+async def test_tick_budget_limits_notifications_per_tick(
+    app: Any, db: asyncpg.Connection, seed: Seed, receiver: Receiver
+) -> None:
+    """Получатель отвечает 500, каждая попытка «длится» TIMEOUT_S: уведомление = 3×5 + 1 + 2 = 18 с.
+
+    Такт 1: №1 (0 → 18 с), №2 (18 < 30 → 36 с), №3 не берётся (36 ≥ 30). Такт 2 — ещё два, такт 3 — последнее.
+    """
+    nids = await _queue(db, seed, 5)
+    fake = FakeTime()
+    in_tx: list[int] = []
+
+    async def on_request() -> None:
+        fake.t += channels.TIMEOUT_S
+        # HTTP-запрос не внутри транзакции: ни одно соединение БД не висит в «idle in transaction»
+        in_tx.append(
+            await db.fetchval(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                "AND pid <> pg_backend_pid() AND state LIKE 'idle in transaction%'"
+            )
+        )
+
+    receiver.on_request = on_request
+    receiver.statuses = [500] * 100
+    webhook = channels.Webhook(app.state.settings, sleep=fake.sleep, monotonic=fake.monotonic)
+
+    assert channels.TICK_BUDGET_S == 30.0
+    first = await channels.deliver_pending(app.state.pool, webhook)
+    assert (first.delivered, first.failed) == (0, 2)
+    assert [await _status(db, n) for n in nids] == ["failed"] * 2 + ["pending"] * 3
+    assert fake.t - 1000.0 == pytest.approx(36.0)  # начатое №2 доведено до конца после 30 с
+    assert len(receiver.requests) == 6
+
+    second = await channels.deliver_pending(app.state.pool, webhook)
+    assert (second.delivered, second.failed) == (0, 2)
+    third = await channels.deliver_pending(app.state.pool, webhook)
+    assert (third.delivered, third.failed) == (0, 1)
+    assert [await _status(db, n) for n in nids] == ["failed"] * 5
+    assert len(receiver.requests) == 15
+    assert in_tx and set(in_tx) == {0}
+
+
+async def test_tick_budget_not_exceeded_with_fast_receiver(
+    app: Any, db: asyncpg.Connection, seed: Seed, receiver: Receiver
+) -> None:
+    """Быстрый получатель: бюджет не мешает — за такт уходит вся пачка."""
+    nids = await _queue(db, seed, 5)
+    fake = FakeTime()
+    webhook = channels.Webhook(app.state.settings, sleep=fake.sleep, monotonic=fake.monotonic)
+    result = await channels.deliver_pending(app.state.pool, webhook)
+    assert (result.delivered, result.failed) == (5, 0)
+    assert [await _status(db, n) for n in nids] == ["delivered"] * 5
+
+
+async def test_tick_budget_checked_before_each_notification(
+    app: Any, db: asyncpg.Connection, seed: Seed, receiver: Receiver
+) -> None:
+    """Ровно 30 с к началу следующего уведомления — уже «≥ 30 с»: оно не берётся."""
+    nids = await _queue(db, seed, 2)
+    fake = FakeTime()
+
+    async def on_request() -> None:
+        fake.t += channels.TICK_BUDGET_S
+
+    receiver.on_request = on_request
+    webhook = channels.Webhook(app.state.settings, sleep=fake.sleep, monotonic=fake.monotonic)
+    result = await channels.deliver_pending(app.state.pool, webhook)
+    assert (result.delivered, result.failed) == (1, 0)
+    assert [await _status(db, n) for n in nids] == ["delivered", "pending"]

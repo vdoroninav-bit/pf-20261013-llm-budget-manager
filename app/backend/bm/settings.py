@@ -11,7 +11,15 @@ from pydantic import AnyUrl, Field, SecretStr, ValidationError, field_validator,
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Поля-секреты, для которых поддерживается вариант `<ИМЯ>_FILE`.
-_FILE_SECRETS = ("session_secret", "admin_initial_password", "anthropic_admin_key", "openai_admin_key")
+# Файлы читаются до проверки полей, поэтому валидаторы (схема прокси, длина SESSION_SECRET) действуют и для
+# значения из файла, а обязательный SESSION_SECRET можно передать только через SESSION_SECRET_FILE.
+_FILE_SECRETS = (
+    "session_secret",
+    "admin_initial_password",
+    "anthropic_admin_key",
+    "openai_admin_key",
+    "import_https_proxy",  # T097, 14_tech_rulings.md, пакет 4, 4Д4
+)
 
 
 class Settings(BaseSettings):
@@ -54,6 +62,7 @@ class Settings(BaseSettings):
     # Прокси только для импорта (14_tech_rulings.md, пакет 2, Б4): пусто — прямой выход. Стандартные
     # HTTP(S)_PROXY не действуют (egress: trust_env=False). Логин и пароль в URL — секрет.
     import_https_proxy: SecretStr | None = None
+    import_https_proxy_file: Path | None = None
 
     # Уведомления
     webhook_url: str | None = None
@@ -69,10 +78,27 @@ class Settings(BaseSettings):
 
     @model_validator(mode="before")
     @classmethod
-    def _empty_is_unset(cls, data: Any) -> Any:
-        """`WEBHOOK_URL=` и пустые секреты в .env — то же, что «не задано»."""
-        if isinstance(data, dict):
-            return {k: v for k, v in data.items() if not (isinstance(v, str) and v.strip() == "")}
+    def _empty_is_unset_and_read_files(cls, data: Any) -> Any:
+        """`WEBHOOK_URL=` и пустые секреты в .env — то же, что «не задано». Затем `<ИМЯ>_FILE` подменяет
+        `<ИМЯ>` (приоритет файла); пустой файл — «не задано». Значение секрета в текст ошибки не попадает."""
+        if not isinstance(data, dict):
+            return data
+        data = {k: v for k, v in data.items() if not (isinstance(v, str) and v.strip() == "")}
+        for name in _FILE_SECRETS:
+            path = data.get(f"{name}_file")
+            if path is None:
+                continue
+            try:
+                value = Path(path).read_text(encoding="utf-8").strip()
+            except (OSError, UnicodeDecodeError) as exc:
+                raise ValueError(
+                    f"{name.upper()}_FILE: не удалось прочитать файл {path} ({type(exc).__name__}); "
+                    "проверьте секрет в compose или уберите переменную"
+                ) from None
+            if value:
+                data[name] = value
+            else:
+                data.pop(name, None)
         return data
 
     @field_validator("session_secret")
@@ -100,12 +126,7 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def _read_secret_files(self) -> "Settings":
-        for name in _FILE_SECRETS:
-            path: Path | None = getattr(self, f"{name}_file")
-            if path is not None:
-                value = path.read_text(encoding="utf-8").strip()
-                object.__setattr__(self, name, SecretStr(value) if value else None)
-        if self.session_secret is None or len(self.session_secret.get_secret_value()) < 16:
+    def _session_secret_length(self) -> "Settings":
+        if len(self.session_secret.get_secret_value()) < 16:
             raise ValueError("SESSION_SECRET должен быть не короче 16 символов (openssl rand -hex 32)")
         return self

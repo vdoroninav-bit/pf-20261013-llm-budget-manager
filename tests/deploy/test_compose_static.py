@@ -32,8 +32,10 @@ SENTINEL_SECRETS = {
     "ADMIN_INITIAL_PASSWORD": "sentinel-admin-password-0003",
     "ANTHROPIC_ADMIN_KEY": "sentinel-anthropic-key-0004",
     "OPENAI_ADMIN_KEY": "sentinel-openai-key-0005",
+    # Логин и пароль прокси в URL — секрет (14_tech_rulings.md, пакет 4, 4Д4): только файлом, только у worker.
+    "IMPORT_HTTPS_PROXY": "http://proxy-user:proxy-pass@10.9.8.7:3128",
 }
-PROXY = "http://proxy-user:proxy-pass@10.9.8.7:3128"
+PROXY = SENTINEL_SECRETS["IMPORT_HTTPS_PROXY"]
 
 
 def _docker_compose_available() -> bool:
@@ -240,10 +242,39 @@ def test_prometheus_multiproc_dir_on_tmpfs_only_at_api(config: dict[str, Any]) -
 
 
 @needs_compose
-def test_import_https_proxy_passed_to_worker(config: dict[str, Any]) -> None:
-    assert _env(config["services"]["worker"])["IMPORT_HTTPS_PROXY"] == PROXY
-    # Импорт выполняет только worker (runImport в api ставит задачу в очередь): у api прокси нет.
-    assert "IMPORT_HTTPS_PROXY" not in _env(config["services"]["api"])
+def test_import_https_proxy_passed_to_worker_as_secret_file(config: dict[str, Any], raw_config: str) -> None:
+    """4Д4: прокси — compose secret только у worker (IMPORT_HTTPS_PROXY_FILE); значения нет ни в одном окружении."""
+    worker = config["services"]["worker"]
+    env = _env(worker)
+    assert env["IMPORT_HTTPS_PROXY_FILE"] == "/run/secrets/import_https_proxy"
+    assert "IMPORT_HTTPS_PROXY" not in env
+    assert PROXY not in json.dumps(env) and "proxy-pass" not in raw_config
+    assert config["secrets"]["import_https_proxy"]["environment"] == "IMPORT_HTTPS_PROXY"
+    # Импорт выполняет только worker (runImport в api ставит задачу в очередь): у api и остальных прокси нет.
+    for service in SERVICES - {"worker"}:
+        svc = config["services"][service]
+        assert not any(k.startswith("IMPORT_HTTPS_PROXY") for k in _env(svc)), service
+        assert "import_https_proxy" not in {s["source"] for s in svc.get("secrets", [])}, service
+
+
+def test_entrypoint_drops_proxy_file_when_secret_is_empty(tmp_path: Path) -> None:
+    """Пустой IMPORT_HTTPS_PROXY в .env — compose файл не создаёт; entrypoint снимает *_FILE (прямой выход)."""
+    present = tmp_path / "proxy"
+    present.write_text("http://10.0.0.1:3128", encoding="utf-8")
+    entrypoint = ROOT / "deploy" / "docker-entrypoint.sh"
+    for path, expected in ((tmp_path / "missing", ""), (present, str(present))):
+        env = {"PATH": "/usr/bin:/bin", "IMPORT_HTTPS_PROXY_FILE": str(path)}
+        # аргументы — константы теста
+        proc = subprocess.run(  # noqa: S603
+            ["sh", str(entrypoint), "sh", "-c", 'printf %s "${IMPORT_HTTPS_PROXY_FILE:-}"'],  # noqa: S607
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=env,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == expected
 
 
 @needs_compose
@@ -280,11 +311,12 @@ def test_env_example_session_cookie_secure_and_proxy() -> None:
     assert "true — если админка открыта через HTTPS" in text
     assert "пусто — прямой выход к API провайдеров" in text
     assert "стандартные HTTP(S)_PROXY утилита игнорирует" in text
+    assert "IMPORT_HTTPS_PROXY_FILE" in text, "в шаблоне сказано, что прокси передаётся worker файлом"
 
 
 def test_env_example_has_no_secret_values() -> None:
     keys = _env_example_keys()
-    for name in [*SENTINEL_SECRETS, "IMPORT_HTTPS_PROXY", "WEBHOOK_URL", "BM_ADMIN_PASSWORD"]:
+    for name in [*SENTINEL_SECRETS, "WEBHOOK_URL", "BM_ADMIN_PASSWORD"]:
         assert keys.get(name, "") == "", f"{name} в шаблоне должен быть пустым"
 
 

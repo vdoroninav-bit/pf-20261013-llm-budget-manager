@@ -1,8 +1,9 @@
 """T032 / SC-002: отказ всех компонентов утилиты под потоком (сценарий 1.8, FR-006, принцип III).
 
-Стек поднят (`make up`). Два подразделения: fail_mode=open и fail_mode=closed, у каждого сервисный ключ.
+Стек поднят: `make up && make failover` или `make up-local && BM_STACK=local make failover` (T093). Два подразделения: fail_mode=open и fail_mode=closed, у каждого сервисный ключ.
 Эталонный клиент `budget_client` (T033) шлёт 20 rps в течение 60 с (по 10 rps на подразделение).
-Через 5 с — `docker compose stop api worker postgres`. Ожидается:
+Через 5 с — остановка api, worker, postgres (`docker compose stop` или, при BM_STACK=local, SIGTERM/SIGINT →
+до 10 с → SIGKILL группы процессов, tests/failover/stack.py). Ожидается:
 - 100% вызовов подразделения open выполняются (ответ утилиты или fail-open);
 - 100% вызовов подразделения closed, начатых после остановки, получают PolicyUnavailable;
 - никаких иных исключений клиента;
@@ -24,12 +25,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from tests.failover.stack import BASE_URL, compose, provision, report_counts, wait_ready
+from tests.failover.stack import BASE_URL, STACK, provision, report_counts, start, stop, wait_ready
 
 RPS_PER_DEPT = 10
 DURATION_S = 60
 STOP_AT_S = 5
 SERVICES = ("api", "worker", "postgres")
+WARMUP_ATTEMPTS = 5  # 3Б9: прогрев повторяется до ответа без fail_open, не больше 5 попыток
 
 
 @dataclass
@@ -91,10 +93,22 @@ def test_sc002_stop_all_components_fail_open_and_closed(stack: None, tmp_path: P
         mode: BudgetClient(BASE_URL, data.keys[mode], tmp_path / mode, timeout_ms=50)
         for mode in ("open", "closed")
     }
-    # прогрев: клиент получает integration-config (fail_mode подразделения) и кэширует его на диске
+    # прогрев: клиент получает integration-config (fail_mode подразделения) и кэширует его на диске.
+    # Первый вызов может не уложиться в 50 мс (холодный старт, общая 2-CPU среда) и уйти в fail-open —
+    # повторяем до ответа утилиты, не больше WARMUP_ATTEMPTS раз (3Б9); сам assert не ослаблен.
     for mode, c in clients.items():
-        warm = c.decide({"type": "service"}, data.model, "chat", input_tokens=1, max_output_tokens=1)
-        assert warm.outcome == "allow" and not getattr(warm, "fail_open", False), f"{mode}: стек не отвечает"
+        warm: Any = None
+        for _ in range(WARMUP_ATTEMPTS):
+            try:
+                warm = c.decide({"type": "service"}, data.model, "chat", input_tokens=1, max_output_tokens=1)
+            except PolicyUnavailable:
+                warm = None
+            if warm is not None and not getattr(warm, "fail_open", False):
+                break
+            time.sleep(0.2)
+        assert warm is not None and warm.outcome == "allow" and not getattr(warm, "fail_open", False), (
+            f"{mode}: стек не отвечает за {WARMUP_ATTEMPTS} попыток прогрева"
+        )
 
     journal = Journal()
     t0 = time.monotonic()
@@ -110,12 +124,12 @@ def test_sc002_stop_all_components_fail_open_and_closed(stack: None, tmp_path: P
         for t in threads:
             t.start()
         time.sleep(STOP_AT_S)
-        compose("stop", *SERVICES)
+        stop(*SERVICES)
         stopped_at = time.monotonic()
         for t in threads:
             t.join(timeout=DURATION_S + 30)
     finally:
-        compose("start", *reversed(SERVICES))
+        start(*reversed(SERVICES))
         wait_ready(120)
 
     assert stopped_at is not None
@@ -150,3 +164,8 @@ def test_sc002_stop_all_components_fail_open_and_closed(stack: None, tmp_path: P
     dupes = [rid for rid, n in counts.items() if n > 1]
     assert not missing, f"не досланы {len(missing)} из {len(executed)} отчётов"
     assert not dupes, f"дубли в БД: {len(dupes)}"
+    print(  # итог для 15_qa_report.md (видно с `pytest -s`)
+        f"SC-002 [{STACK}]: вызовов {total}; open {len(open_calls)} (в окне отказа {len(open_down)}, все fail_open); "
+        f"closed в окне отказа {len(closed_down)}, отклонено {rejected}; отчётов {len(executed)}, "
+        f"в БД ровно по одному — {len(executed) - len(missing) - len(dupes)}"
+    )

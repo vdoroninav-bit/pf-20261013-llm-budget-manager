@@ -20,6 +20,10 @@ LOCAL_STACK  := bash deploy/local/stack.sh
 COMPOSE      := env -u DATABASE_URL docker compose
 COMPOSE_TEST := $(COMPOSE) -f deploy/docker-compose.test.yml
 COMPOSE_MAIN := $(COMPOSE) -f deploy/docker-compose.yml --env-file deploy/.env
+# Та же команда для проверок smoke/failover, которые сами зовут compose (tests/smoke, tests/failover/stack.py):
+# иначе тестовый DATABASE_URL из окружения make попал бы в интерполяцию compose-файла.
+BM_COMPOSE   ?= $(COMPOSE_MAIN)
+export BM_COMPOSE
 IMAGE        ?= bm:local
 # compose — стек docker compose (по умолчанию); local — стек из локальных процессов (deploy/local/stack.sh).
 BM_STACK     ?= compose
@@ -90,7 +94,7 @@ endef
 
 up: ## Поднять стек и дождаться readyz (T087)
 	$(need_compose)
-	$(COMPOSE_MAIN) up -d --build --wait --wait-timeout 120
+	$(COMPOSE_MAIN) up -d --build --wait --wait-timeout 180
 
 down: ## Остановить стек (данные в томах сохраняются)
 	$(need_compose)
@@ -104,7 +108,7 @@ smoke: sync ## Smoke против поднятого стека (BM_STACK=compos
 	$(STACK_ENV) BM_SMOKE=1 $(UV_RUN) pytest tests/smoke -v -ra
 
 failover: sync ## Отказные тесты SC-002/SC-003 против поднятого стека (make up или up-local + BM_STACK=local) (T032, T093)
-	$(STACK_ENV) BM_FAILOVER=1 BASE_URL=$${BASE_URL:-http://127.0.0.1:8080} $(UV_RUN) pytest tests/failover -v
+	$(STACK_ENV) BM_FAILOVER=1 BASE_URL=$${BASE_URL:-http://127.0.0.1:8080} $(UV_RUN) pytest tests/failover -v -ra
 
 backup: ## Резервная копия pg_dump -Fc сейчас (compose: том backups; local: deploy/local/.state/backups)
 ifeq ($(BM_STACK),local)
@@ -121,7 +125,7 @@ else
 	$(need_compose)
 	$(COMPOSE_MAIN) stop api worker
 	$(COMPOSE_MAIN) exec -T backup bash /backup/restore.sh $(FILE)
-	$(COMPOSE_MAIN) up -d --wait --wait-timeout 120 api worker
+	$(COMPOSE_MAIN) up -d --wait --wait-timeout 180 api worker
 endif
 
 # ---------- стек из локальных процессов (14_tech_rulings.md, пакет 3, 3Д1(в)) ----------
@@ -132,7 +136,10 @@ up-local: sync ## Поднять стек из локальных процесс
 down-local: ## Остановить стек из локальных процессов (данные кластера сохраняются; удалить: deploy/local/stack.sh destroy)
 	$(LOCAL_STACK) down
 
-e2e load: ## Появятся в T086 (load), QA (e2e)
+load: sync ## Нагрузка SC-001/SC-004 против поднятого стека (BM_STACK=compose|local; LOAD_RATE, LOAD_DURATION_S, VEGETA) (T086)
+	$(STACK_ENV) bash tests/load/run_load.sh
+
+e2e: ## Появится в задаче QA (e2e)
 	@echo "make $@: ещё не реализовано (см. 12_tasks.md)"; exit 2
 
 clean: ## Удалить локальные артефакты (venv, кэши, deploy/ci/out)

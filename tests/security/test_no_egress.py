@@ -225,3 +225,40 @@ def test_standard_proxy_env_still_ignored_with_import_proxy(monkeypatch: pytest.
     assert _proxies(get_client("anthropic", _settings(import_enabled=True))) == []
     client = get_client("anthropic", _settings(import_enabled=True, import_https_proxy=PROXY))
     assert _proxies(client) == [f"http://{PROXY_HOST}:{PROXY_PORT}"]
+
+
+# ---------------------------------------------------------------- IMPORT_HTTPS_PROXY_FILE (T097, пакет 4, 4Д4)
+
+
+def _settings_proxy_file(tmp_path: Any, **kw: Any) -> Settings:
+    f = tmp_path / "import_https_proxy"
+    f.write_text(PROXY + "\n", encoding="utf-8")
+    return _settings(import_https_proxy_file=str(f), **kw)
+
+
+@pytest.mark.parametrize("purpose", ["anthropic", "openai"])
+def test_proxy_from_file_applies_to_provider_clients(purpose: str, tmp_path: Any) -> None:
+    client = get_client(purpose, _settings_proxy_file(tmp_path, import_enabled=True))  # type: ignore[arg-type]
+    assert _proxies(client) == [f"http://{PROXY_HOST}:{PROXY_PORT}"]
+
+
+def test_proxy_from_file_never_applies_to_webhook(tmp_path: Any) -> None:
+    client = get_client(
+        "webhook", _settings_proxy_file(tmp_path, webhook_url="http://10.0.0.5/hook", import_enabled=True)
+    )
+    assert _proxies(client) == []
+
+
+async def test_proxy_from_file_password_not_logged(
+    expect_egress_attempts: list[Any], caplog: pytest.LogCaptureFixture, tmp_path: Any
+) -> None:
+    """Пароль прокси из файла не попадает в журнал; соединение — только к прокси."""
+    import logging
+
+    client = get_client("openai", _settings_proxy_file(tmp_path, import_enabled=True))
+    with caplog.at_level(logging.DEBUG):
+        async with client:
+            with pytest.raises(httpx.TransportError):
+                await client.get("https://api.openai.com/v1/organization/costs")
+    assert [(str(h), int(p)) for h, p, *_ in expect_egress_attempts] == [(PROXY_HOST, PROXY_PORT)]
+    assert PROXY_PASSWORD not in caplog.text

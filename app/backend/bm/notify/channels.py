@@ -7,6 +7,10 @@
   (`deliver_pending`) отправляет их POST-запросом с JSON-телом. Ответ 2xx — `delivered`; иначе до
   `ATTEMPTS` попыток с паузой, затем `failed`. Соединение — только через `bm.egress` («webhook»: частные
   адреса, без редиректов и прокси из окружения).
+- **Бюджет такта** (T096, 14_tech_rulings.md 4Б4): задачи worker выполняются по очереди, поэтому
+  `deliver_pending` не берёт следующее уведомление, если с начала такта прошло ≥ `TICK_BUDGET_S`
+  (по монотонным часам). Начатое доводится до конца (худший случай ≈ 30 + 18 с), остальные остаются
+  `pending` до следующего такта. HTTP-запрос выполняется без открытой транзакции и занятого соединения БД.
 
 Тело запроса — только поля уведомления (`PAYLOAD_FIELDS`), без идентификаторов сотрудников: тексты уведомлений
 говорят о подразделениях и источниках, а не о людях.
@@ -15,6 +19,7 @@
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -32,6 +37,7 @@ ATTEMPTS = 3
 RETRY_DELAYS_S = (1.0, 2.0)  # пауза перед 2-й и 3-й попыткой
 TIMEOUT_S = 5.0  # на одну попытку: задача не должна надолго занимать worker
 BATCH = 20  # уведомлений за один такт; остальные — в следующем
+TICK_BUDGET_S = 30.0  # с начала такта: дольше следующее уведомление не берётся (4Б4)
 PAYLOAD_FIELDS = ("id", "kind", "department_id", "period", "period_start", "message", "created_at")
 
 
@@ -64,7 +70,7 @@ def payload(row: asyncpg.Record) -> dict[str, Any]:
 
 
 class Webhook:
-    """Отправка одного уведомления на `WEBHOOK_URL` с повтором. `sleep` подменяется в тестах."""
+    """Отправка одного уведомления на `WEBHOOK_URL` с повтором. `sleep` и `monotonic` подменяются в тестах."""
 
     name = "webhook"
 
@@ -74,10 +80,12 @@ class Webhook:
         *,
         transport: Any = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings = settings
         self._transport = transport
         self._sleep = sleep
+        self.monotonic = monotonic
 
     def client(self) -> Any:
         """httpx-клиент от `bm.egress`. EgressDisabled/EgressForbidden — адрес выключен или не частный."""
@@ -114,10 +122,14 @@ class DeliveryResult:
 async def deliver_pending(pool: asyncpg.Pool, webhook: Webhook) -> DeliveryResult:
     """Задача worker: до `BATCH` уведомлений `pending` по порядку создания → `delivered` или `failed`.
 
+    Перед каждым уведомлением проверяется бюджет такта `TICK_BUDGET_S`; соединение БД берётся только на чтение
+    очереди и на смену статуса (autocommit), на время HTTP-запроса оно возвращено в пул.
+
     Клиент создаётся до чтения очереди: если адрес не проходит `egress`, исключение уходит в `job_run`,
     а уведомления остаются `pending` (после исправления `WEBHOOK_URL` они будут доставлены). Задачу выполняет
     один процесс (advisory-блокировка планировщика), статус меняется только из `pending`.
     """
+    started = webhook.monotonic()
     client = webhook.client()
     delivered = failed = 0
     async with client:
@@ -128,6 +140,8 @@ async def deliver_pending(pool: asyncpg.Pool, webhook: Webhook) -> DeliveryResul
                 BATCH,
             )
         for row in rows:
+            if webhook.monotonic() - started >= TICK_BUDGET_S:
+                break  # остальные — pending до следующего такта
             ok = await webhook.send(client, payload(row))
             async with pool.acquire() as conn:
                 await conn.execute(
@@ -138,6 +152,8 @@ async def deliver_pending(pool: asyncpg.Pool, webhook: Webhook) -> DeliveryResul
                 )
             delivered += ok
             failed += not ok
+    if left := len(rows) - delivered - failed:
+        log.info("webhook_tick_budget", extra={"count": left, "status": "pending"})
     if delivered or failed:
         log.info("webhook_delivery", extra={"count": delivered, "status": "delivered"})
         if failed:

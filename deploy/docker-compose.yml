@@ -61,6 +61,9 @@ services:
       timeout: 3s
       retries: 30
       start_period: 30s
+      # Во время start_period проверка идёт чаще, чем interval: make up --wait не ждёт лишний interval.
+      # [Гипотеза] нужен Docker Engine ≥ 25 (на раннере ubuntu-24.04 — новее); версию печатает CI.
+      start_interval: 2s
     restart: unless-stopped
     stop_grace_period: 30s
 
@@ -90,6 +93,7 @@ services:
       timeout: 5s
       retries: 6
       start_period: 30s
+      start_interval: 2s
     restart: unless-stopped
 
   worker:
@@ -98,11 +102,13 @@ services:
     environment:
       <<: *app-env
       # Импорт расхода выполняет только worker: ключи провайдеров и прокси есть только у него.
-      # Прокси — только для импорта (14_tech_rulings.md, пакет 2, Б4). Пусто — прямой выход к API провайдеров.
-      IMPORT_HTTPS_PROXY: ${IMPORT_HTTPS_PROXY:-}
+      # Прокси — только для импорта (14_tech_rulings.md, пакет 2, Б4). Логин и пароль в URL прокси — секрет,
+      # поэтому файлом, как ключи (пакет 4, 4Д4). Пусто в .env — файла нет, entrypoint снимает *_FILE:
+      # прямой выход к API провайдеров.
       ANTHROPIC_ADMIN_KEY_FILE: /run/secrets/anthropic_admin_key
       OPENAI_ADMIN_KEY_FILE: /run/secrets/openai_admin_key
-    secrets: [postgres_password, session_secret, anthropic_admin_key, openai_admin_key]
+      IMPORT_HTTPS_PROXY_FILE: /run/secrets/import_https_proxy
+    secrets: [postgres_password, session_secret, anthropic_admin_key, openai_admin_key, import_https_proxy]
     networks: [core, edge]
     depends_on:
       postgres:
@@ -117,6 +123,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+      start_interval: 2s
     restart: unless-stopped
 
   backup:
@@ -147,6 +154,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
+      start_interval: 2s
     restart: unless-stopped
 
 networks:
@@ -169,3 +177,5 @@ secrets:
     environment: ANTHROPIC_ADMIN_KEY
   openai_admin_key:
     environment: OPENAI_ADMIN_KEY
+  import_https_proxy:
+    environment: IMPORT_HTTPS_PROXY

@@ -2,8 +2,10 @@
 #   docker build -f deploy/Dockerfile --target python-runtime -t bm:local .
 # Стадии: node-build (SPA админки) → python-deps → python-runtime (+ /app/static/admin); tests — для make test-docker.
 #
-# Базовые образы закреплены по тегу. Закрепление по digest (@sha256:...) — после первой сборки в CI (T092):
-# digest берётся из журнала прогона. В этой среде реестры закрыты (403), digest получить нельзя.
+# Базовые образы закреплены по тегу. [Гипотеза] Digest (@sha256:...) пока не закреплён: реестры из среды
+# разработки закрыты (403), а журнал прогона CI eb17642 недоступен (14_tech_rulings.md, пакет 4, 4Д1).
+# CI печатает digest каждого базового образа аннотацией ::notice «Digest базовых образов»; после прогона
+# значения переносятся сюда в виде python:3.13-slim@sha256:<digest> (тег оставляется для читаемости).
 # Для закрытого контура: те же ARG указывают на зеркало, например --build-arg PYTHON_IMAGE=registry.local/python:3.13-slim
 ARG PYTHON_IMAGE=python:3.13-slim
 ARG NODE_IMAGE=node:24-slim
