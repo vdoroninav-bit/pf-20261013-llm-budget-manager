@@ -1,6 +1,8 @@
+QA: CONDITIONAL
+
 # 15. Отчёт QA — LLM Budget Manager v1
 
-> Решения QA (`QA: PASS` / `QA: FAIL`) пока нет: первая строка появится после релизного прогона T089.
+> Решение QA — по релизному прогону T089 (SHA `d98ba2d`), см. раздел «Релизный прогон и гейты (T089)» в конце. FAIL нет. CONDITIONAL из-за обязательного гейта SC-001 (PASS-замена) и лицензии `certifi` (ждёт юриста). Список непроверенного передаётся в `16_release.md`.
 
 ## Приёмочные тесты до реализации (T020, T030, T032, T040) — 2026-10-15
 
@@ -278,3 +280,95 @@ $ make smoke BM_STACK=local
 
 ### Вопросы техлиду
 - Нет.
+
+## Релизный прогон и гейты (T089) — 2026-10-21, SHA `d98ba2d`
+
+**Итог: `QA: CONDITIONAL`.** FAIL нет. Все проверки Docker по релизному SHA зелёные: сборка, smoke, backup/restore, failover, Trivy, PG 18, SBOM. Без условий не проходят два обязательных гейта конституции. SC-001 по правилу 5Р может получить только PASS-замену. Лицензия `certifi` (MPL-2.0) ждёт подтверждения юриста (3Д3). Остальное непроверенное — в таблице ниже, его принимает заказчик или проверяет на своём стенде (3Д2).
+
+### Основание
+- **CI.** Прогон 39663848299 на `d98ba2d`: `completed success`, обе задачи (`test`, `delivery`) — success. Источник — `deploy/ci/runs/d98ba2d.md`: аннотации check-run, которые оркестратор получил через API GitHub. Полного журнала нет, blob.core.windows.net закрыт прокси.
+- **Локально, `bm_test`, без параллельных прогонов.** HEAD = `d98ba2d`, в рабочем дереве поверх него только `deploy/ci/runs/d98ba2d.md`. Стек из локальных процессов пересоздан на HEAD (`stack.sh destroy && make up-local`).
+- **Код api после 10-минутного SC-001 (сегодня, 21:53–22:04, после T098).** С тех пор изменился только `app/backend/bm/db/migrate.py` (`git diff 92b3414 d98ba2d`). `CREATE TABLE IF NOT EXISTS schema_migrations` перенесён под advisory-lock: это код старта, горячего пути решений он не касается. Поэтому полный прогон SC-001 засчитывается, а короткий прогон на HEAD служит контролем регрессии.
+
+### Команды и вывод (сокращённо)
+```text
+$ make lint                                                  # HEAD d98ba2d
+Contracts: 3 kept, 0 broken. / All checks passed! / 176 files already formatted
+
+$ DATABASE_URL=postgresql://bm:bm@127.0.0.1:5432/bm_test make test     # loadavg до 0.01, rc=0
+805 passed, 1 skipped in 216.35s     (skip: tests/unit/test_serve.py — AF_INET6 недоступен в среде)
+Contracts: 3 kept, 0 broken.
+Test Files 28 passed (28) / Tests 363 passed (363)
+run-tests.sh full: OK
+
+$ bash deploy/local/stack.sh destroy && make up-local
+postgres: running / api: running / worker: running
+$ make smoke BM_STACK=local
+4 passed, 6 skipped (compose_only — проверяется в CI)
+
+$ make failover BM_STACK=local PYTEST_ADDOPTS=-s             # loadavg до 2.09, после 1.47
+SC-002 [local]: вызовов 1200; open 600 (в окне отказа 493, все fail_open); closed в окне отказа 493, отклонено 493; отчётов 653, в БД ровно по одному — 653
+SC-003 [local]: подтверждено 200 — 3499 (до kill 1341), потеряно 0, дублей 0; прочее {'conn_errors': 208}
+2 passed in 93.73s
+$ make smoke BM_STACK=local                                  # после failover
+4 passed, 6 skipped
+
+$ make load BM_STACK=local LOAD_DURATION_S=120               # контроль регрессии; loadavg до 0.82, после 0.43
+SC-001 нагрузка: httpx (vegeta не использован); запросов 6000, факт 50.01 rps, успешных 100.00%
+  внутри (/metrics): ≤10 мс 99.47% (≥95%), ≤25 мс 99.93% (≥99%); p95 ≈ 6.34 мс, p99 ≈ 8.75 мс
+  у клиента: p50 8.49 мс, p95 11.60 мс (≤20), p99 16.30 мс, max 58.07 мс
+SC-001: PASS / SC-004: PASS (перерасход 0.078% ≤ 2%) / make load: PASS
+
+# CI 39663848299, d98ba2d (аннотации)
+test:     make lint PASS; make compose-check PASS; make test (PG 18.6) PASS; frontend (node 24) PASS
+delivery: make build PASS; up PASS; smoke PASS; backup PASS; restore PASS; smoke после restore PASS;
+          make failover PASS; CHECK_STRICT=1 make check PASS (WARN npm: 7 moderate); egress-host-check (попытка) PASS
+Trivy bm:local: CRITICAL 0; certifi 2026.10.19 — одна установка (app/.venv). Базовый python:3.13-slim: CRITICAL 1
+          (certifi 2026.6.17), в итоговый образ не попадает (FROM scratch, T099)
+SBOM: sbom-image / sbom-npm / sbom-python .cdx.json с sha256 в аннотации
+```
+
+### Гейты (3Д2, 4Р, 5Р)
+
+Обязательные гейты конституции (§ «Перед релизом», 3Д2) отмечены знаком ★.
+
+| Гейт | Статус | Отличие / причина / где проверить |
+|---|---|---|
+| ★ Приёмочные и `make test` | **PASS** | CI: PG 18.6, `d98ba2d`. Локально: PG 16, 805 passed + vitest 363 passed |
+| ★ SC-001 (p95/p99, 50 rps × 10 мин) | **PASS-замена** | Полный прогон после T098 — раздел выше. Короткий прогон на HEAD — PASS. Среда разработки, не эталонный стенд, генератор httpx (vegeta не использован), PG 16. По 5Р выше PASS-замены здесь не поднять. Где проверить: эталонный стенд заказчика, `make up && make load` |
+| ★ SC-002 (остановка компонентов) | **PASS** | `make failover` в Docker по CI релизного SHA (5Д4). Локально — PASS-замена (сигналы процессам) |
+| SC-003 (kill api под нагрузкой) | **PASS** | Так же, CI `d98ba2d` |
+| SC-004 (граница лимита) | PASS-замена | Стек из локальных процессов |
+| ★ SCA образа (Trivy) | **PASS** | `bm:local` CRITICAL 0 (было FAIL в 5Р). Базовый образ в поставку не входит |
+| ★ SCA Python/npm, уязвимости | **PASS** | `CHECK_STRICT=1 make check` в CI — exit 0. Гейт npm — только critical |
+| ★ SCA, лицензии: `certifi` (MPL-2.0) | **НЕ ПРОВЕРЕНО** | Узкое исключение `pypi:certifi@2026.10.19` в `licenses-exceptions.txt` действует, `make check` его принял. По 3Д3 MPL-2.0 вне белого списка, нужно подтверждение юриста заказчика |
+| npm: 7 moderate (через react-admin) | Известное ограничение v1 | 5Р. Пересмотреть при обновлении react-admin |
+| ★ SBOM | **PASS** | 3 файла CycloneDX, sha256 — в аннотации CI `d98ba2d` |
+| Сборка образа, `make up`, smoke с `compose_only` | **PASS** | CI `d98ba2d` |
+| Backup / restore + smoke после restore | **PASS** | CI `d98ba2d`. Локально backup/restore не прогонялся |
+| PostgreSQL 18 | **PASS** | CI: postgres 18.6 (`make test`), `postgres@sha256:edb0c08d…` |
+| `egress-host-check` | **НЕ ПРОВЕРЕНО** → PASS после подтверждения DevOps | В аннотации стоит «(попытка): PASS (1 с)». Правило 5Р требует, чтобы DevOps подтвердил по релизному журналу, что проверка действительно выполнилась. Такого подтверждения для `d98ba2d` в `14_devops.md` нет. [Вывод QA по коду `deploy/ci/egress-host-check.sh`] exit 0 возможен только на ветке «пакетов наружу = 0 → OK»: все случаи «не запускалась» выходят с кодом 2, а шаг `gha.py` при ненулевом коде показал бы не PASS. В CI `.env` взят из `.env.example`, где `IMPORT_ENABLED=false` и `IMPORT_HTTPS_PROXY=` пустой — так требует T089 |
+| Формат Anthropic `cost_report` (единицы `amount`, `currency`, модель) | **НЕ ПРОВЕРЕНО** | Нужен реальный ответ провайдера на стенде заказчика (`docs/admin-guide.md` §14, п. 10). При ошибке расход завышается или занижается в 100 раз |
+| Формат OpenAI `costs` (модель из `line_item`, `null`-поля) | **НЕ ПРОВЕРЕНО** | Там же. Влияет на разбивку по моделям, а не на сумму |
+| SC-009, руководство на чистой машине (T090) | **НЕ ПРОВЕРЕНО** | Здесь реестры образов закрыты (3Д1). Проверяет заказчик или QA на стенде с доступом к образам, по `admin-guide.md` §14 |
+| Контейнер `backup` от root | Известное ограничение v1 | 4Д8 (5) |
+| `make e2e` (UI в браузере) | Не входит в T089 | Цель — заглушка. UI покрыт vitest (363), API-сценарии P1 — приёмочными тестами |
+
+### Почему CONDITIONAL, а не PASS
+По 3Д2 `QA: PASS` ставится, только когда все ★-гейты в статусе PASS. Два ★-гейта не в PASS:
+1. SC-001 — PASS-замена, потому что стенд не эталонный.
+2. SCA по лицензиям: `certifi` MPL-2.0 ждёт юриста.
+
+FAIL нет, блокеров и критичных дефектов нет. По 3Д2 релиз в `16_release.md` называется **условным**. Заказчик либо явно принимает список выше (SC-001-замена, `certifi`, `egress-host-check`, форматы Anthropic/OpenAI, SC-009, SC-004-замена, известные ограничения), либо проверяет его на своём стенде по `admin-guide.md` §14.
+
+### Отклонения
+1. **Нет полного журнала CI.** Доказательство — аннотации check-run (`deploy/ci/runs/d98ba2d.md`), а 3Д1(б) требует журнал `gh run view --log`. Принято по прецеденту 5Д4: CI `34d28d0` разбирали так же. Аннотации содержат сводку каждого шага, версии, digest и sha256 SBOM.
+2. **Локально не прогонялись `make backup`/`make restore`, `make check` и `make egress-host-check`:** здесь нет Docker и Trivy. Эти гейты закрыты по CI.
+3. **Локальный стек оставлен поднятым на HEAD**, как и до прогона. Он работает на своём кластере 55432, общий 5432 не трогался.
+
+### Дефекты
+Новых нет.
+
+### Вопросы техлиду
+1. DevOps: подтвердить по CI `d98ba2d`, что `egress-host-check` выполнилась (контейнеры, «пакетов наружу = 0»). Если да, гейт становится PASS. На вердикт `CONDITIONAL` это не влияет.
+2. Устраивают ли аннотации check-run вместо полного журнала (п. 1 отклонений) для закрытия T087 и T092?

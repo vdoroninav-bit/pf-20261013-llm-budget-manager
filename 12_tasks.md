@@ -409,7 +409,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
   - Пакет 5 (14_tech_rulings.md, 5Д1, 5Д2, 5Д8): тест готов, SC-004 — PASS-замена; **SC-001 — FAIL из-за дефекта Д-1** (~40 мс на каждом повторном запросе keep-alive при 2 воркерах), исправляется в T098. После T098 QA повторяет полный 10-минутный `make up-local && make load BM_STACK=local` **без параллельных прогонов других исполнителей** (`loadavg` до и после — в отчёте) и замер эталонного `budget_client` (200 решений, тайм-аут по умолчанию 50 мс — 0 `fail_open` по тайм-ауту). Тайм-аут `budget_client` по умолчанию не меняется. Цель `load` в `Makefile` принимает DevOps.
   - Готово: `make up && make load` печатает PASS и значения p95/p99 (здесь — `make up-local && make load`).
   - Зависимости: T031, T087, T098.
-- [ ] **T087 [—] [devops] Полная поставка.**
+- [x] **T087 [—] [devops] Полная поставка.**
   - Файлы: `deploy/docker-compose.yml` (сервисы `api`, `worker`, `postgres:18`, `backup`; сети `core` с `internal: true` для `postgres` и `backup`, `edge` для `api` и `worker`; healthcheck; `restart: unless-stopped`; порт `${BIND_ADDR}:${API_PORT}:8080`; секреты через `*_FILE`), `deploy/Dockerfile` (стадия node собирает SPA, стадия python копирует `dist` в `/app/static/admin`), `deploy/backup/{backup.sh, restore.sh}`, `tests/smoke/test_smoke.py` (тест пишется первым).
   - Дополнительно (14_tech_rulings.md, Б2, Б6): `SESSION_COOKIE_SECURE=false` с комментарием в `deploy/.env.example` («true — если админка открыта через HTTPS»); у `api` — `PROMETHEUS_MULTIPROC_DIR` на `tmpfs`, каталог очищается при старте контейнера. Каталог только у `api`, с `worker` не делится (пакет 2, В1-6).
   - Дополнительно (14_tech_rulings.md, пакет 2, Б4): `IMPORT_HTTPS_PROXY=` (пусто) в `deploy/.env.example` с комментарием «пусто — прямой выход к API провайдеров; задайте `http(s)://хост:порт`, если выход только через корпоративный прокси; действует только на импорт расхода при `IMPORT_ENABLED=true`, стандартные HTTP(S)_PROXY утилита игнорирует». Переменная передаётся тем сервисам, которые запускают импорт (`worker`, а также `api`, если кнопка «Загрузить сейчас» выполняет импорт в процессе `api`).
@@ -464,7 +464,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
   - Готово: техлид принял документ.
   - Принята техлидом 2026-10-21 (14_tech_rulings.md, пакет 4, 4Т): пути, поля и коды сверены с контрактом 1.0.2 и кодом сервера; В1-2, В1-4, 3К, 3Б9 отражены.
   - Зависимости: T033.
-- [ ] **T092 [P] [—] [devops] CI GitHub Actions** (14_tech_rulings.md, пакет 3, 3Д1(б), 3Д4).
+- [x] **T092 [P] [—] [devops] CI GitHub Actions** (14_tech_rulings.md, пакет 3, 3Д1(б), 3Д4).
   - Файл: `.github/workflows/ci.yml`.
   - Работа: на push в `main` выполняются `make lint`, `make test` против сервиса `postgres:18`, `npm --prefix app/frontend run test && npm --prefix app/frontend run build`, `make build`, `make up && make smoke && make backup && make restore && make smoke`, `make failover`, `CHECK_STRICT=1 make check` (с Trivy по образу), попытка `make egress-host-check`. SBOM и сводка `make check` — артефакты прогона. Сторонних actions — только checkout, версию проверить (иначе пометка [Гипотеза]). Секретов в workflow нет.
   - Пакет 4 (4Д1, 4Д3):
@@ -542,7 +542,7 @@ T092, T093 и T095 оценку не меняют. T092 и T093 перенося
   - Готово: в журнале CI для релизного SHA `CHECK_STRICT=1 make check` — exit 0, Trivy `CRITICAL: 0`; в `14_devops.md` — найденный путь и причина.
   - Статус (DevOps, 2026-10-21): исправление по источнику сделано: источник — SBOM pip `pip/_vendor/bom.cdx.json` в слоях базового образа (CI `92b3414`); `python-runtime` — `FROM scratch` + копия очищенного от pip корня, guard `deploy/image_guard.py`, digest закреплены по прогону `899cf1e`, advisory npm выписаны; окончательно — по аннотациям CI релизного SHA (Trivy `CRITICAL: 0`, notice «Trivy: CRITICAL и путь certifi»). Отчёт — `14_devops.md`, раздел пакета 5.
   - Зависимости: T088, T092.
-- [ ] **T089 [—] [qa] Релизный прогон и гейты.**
+- [x] **T089 [—] [qa] Релизный прогон и гейты.**
   - Работа: `make test` (на `bm_test`, без параллельных прогонов), `make up`, `make smoke`, `make load`, `make failover`, `make check`, `make egress-host-check` (стенд QA), тест восстановления, установка по руководству. `make egress-host-check` проводится при пустом `IMPORT_HTTPS_PROXY` и `IMPORT_ENABLED=false`.
   - Статусы гейтов (14_tech_rulings.md, пакет 3, 3Д2): у каждого гейта PASS / PASS-замена (с указанием отличия) / НЕ ПРОВЕРЕНО (причина, где проверить) / FAIL. Первая строка `15_qa_report.md`: `QA: PASS` — только если все обязательные гейты конституции (приёмочные, SC-001, SC-002, SCA, SBOM) в статусе PASS; иначе `QA: CONDITIONAL` со списком; при любом FAIL — `QA: FAIL`. В этой среде `make up/smoke/load/failover` выполняются на стеке из локальных процессов (`up-local`, `BM_STACK=local`), пункты Docker — по журналу CI (T092).
   - Пакет 4 (4Р) — в список непроверенного добавляются:
