@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=LLM Budget Manager
+Name[ru]=Бюджет-менеджер LLM
+Comment=Budgets and limits for LLM usage
+Comment[ru]=Бюджеты и лимиты на LLM-модели
+Exec=AppRun
+Icon=llm-budget
+Terminal=true
+Categories=Office;Finance;

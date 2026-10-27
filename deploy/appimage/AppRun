@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# «Бюджет-менеджер LLM» — AppImage. Всё внутри: Python 3.13 с приложением, PostgreSQL 16, админка.
+#
+#   ./LLM_Budget_Manager-x86_64.AppImage            запустить (первый запуск — создать базу и секреты)
+#   ./LLM_Budget_Manager-x86_64.AppImage password   показать начальный пароль admin
+#   ./LLM_Budget_Manager-x86_64.AppImage backup     копия базы (pg_dump -Fc) в каталог данных
+#   ./LLM_Budget_Manager-x86_64.AppImage config     путь к файлу настроек
+#   ./LLM_Budget_Manager-x86_64.AppImage version | help
+#
+# Данные и настройки: $LLM_BUDGET_HOME (по умолчанию ~/.local/share/llm-budget). Остановка — Ctrl+C.
+# Настройки приложения (импорт расхода, webhook, порт) — в config.env, переменные те же, что в deploy/.env.example.
+set -euo pipefail
+
+HERE="${APPDIR:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}"
+PY="$HERE/usr/python/bin/python3.13"
+PGBIN="$HERE/usr/pg/pgserver/pginstall/bin"
+ADMIN_DIR="$HERE/usr/share/llm-budget/admin"
+VERSION="$(cat "$HERE/usr/share/llm-budget/VERSION" 2>/dev/null || echo dev)"
+
+DATA="${LLM_BUDGET_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/llm-budget}"
+CONF="$DATA/config.env"
+PGDATA="$DATA/pgdata"
+LOGS="$DATA/logs"
+RUN="$DATA/run"
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'llm-budget: %s\n' "$*" >&2; exit 1; }
+hex() { "$PY" -c 'import secrets,sys; print(secrets.token_hex(int(sys.argv[1])))' "$1"; }
+
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="$HERE/usr/lib/llm-budget"
+unset PYTHONHOME
+
+ensure_config() {
+  mkdir -p "$DATA" "$LOGS" "$RUN"
+  chmod 700 "$DATA"
+  [[ -f "$CONF" ]] && return
+  umask 077
+  cat >"$CONF" <<EOF
+# Настройки «Бюджет-менеджера LLM» (AppImage $VERSION). Создано $(date '+%Y-%m-%d %H:%M').
+# Секреты сгенерированы при первом запуске. Файл не передавайте и не кладите в git.
+BIND_ADDR=127.0.0.1
+API_PORT=8080
+PG_PORT=55432
+UVICORN_WORKERS=2
+POSTGRES_PASSWORD=$(hex 24)
+SESSION_SECRET=$(hex 32)
+SESSION_COOKIE_SECURE=false
+ADMIN_INITIAL_LOGIN=admin
+ADMIN_INITIAL_PASSWORD=$(hex 12)
+LOG_LEVEL=INFO
+# Импорт фактического расхода (раздел 8 docs/admin-guide.md)
+IMPORT_ENABLED=false
+ANTHROPIC_ADMIN_KEY=
+OPENAI_ADMIN_KEY=
+IMPORT_HTTPS_PROXY=
+# Уведомления
+WEBHOOK_URL=
+EOF
+  umask 022
+  FIRST_RUN=1
+}
+
+load_config() {
+  set -a; # shellcheck disable=SC1090
+  source "$CONF"; set +a
+  : "${PG_PORT:=55432}" "${API_PORT:=8080}" "${BIND_ADDR:=127.0.0.1}"
+  export PGPASSWORD="$POSTGRES_PASSWORD"
+  export DATABASE_URL="postgresql://bm@127.0.0.1:$PG_PORT/bm"
+  export PROMETHEUS_MULTIPROC_DIR="$RUN/metrics"
+}
+
+port_busy() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+pg_init() {
+  [[ -f "$PGDATA/PG_VERSION" ]] && return
+  say "• Создаю базу данных в $PGDATA"
+  local pw; pw="$(mktemp "$DATA/.pw.XXXXXX")"
+  printf '%s\n' "$POSTGRES_PASSWORD" >"$pw"
+  "$PGBIN/initdb" -D "$PGDATA" -U bm --pwfile="$pw" --auth-local=scram-sha-256 --auth-host=scram-sha-256 \
+    --encoding=UTF8 --locale=C >"$LOGS/initdb.log" 2>&1 || { rm -f "$pw"; cat "$LOGS/initdb.log" >&2; die "initdb не удался"; }
+  rm -f "$pw"
+  cat >>"$PGDATA/postgresql.conf" <<EOF
+# llm-budget AppImage
+listen_addresses = '127.0.0.1'
+unix_socket_directories = ''
+timezone = 'UTC'
+max_connections = 100
+EOF
+}
+
+pg_start() {
+  if "$PGBIN/pg_ctl" -D "$PGDATA" status >/dev/null 2>&1; then return; fi
+  port_busy "$PG_PORT" && die "порт $PG_PORT занят (задайте другой PG_PORT в $CONF)"
+  "$PGBIN/pg_ctl" -D "$PGDATA" -o "-p $PG_PORT" -l "$LOGS/postgres.log" -w -t 60 start >/dev/null \
+    || { tail -n 30 "$LOGS/postgres.log" >&2; die "PostgreSQL не запустился"; }
+  "$PGBIN/psql" -h 127.0.0.1 -p "$PG_PORT" -U bm -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='bm'" \
+    | grep -q 1 || "$PGBIN/createdb" -h 127.0.0.1 -p "$PG_PORT" -U bm bm
+}
+
+pg_stop() { "$PGBIN/pg_ctl" -D "$PGDATA" -m fast -w stop >/dev/null 2>&1 || true; }
+
+PIDS=()
+cleanup() {
+  trap - INT TERM EXIT
+  say ""; say "• Останавливаю…"
+  for p in "${PIDS[@]}"; do kill -TERM "$p" 2>/dev/null || true; done
+  for p in "${PIDS[@]}"; do wait "$p" 2>/dev/null || true; done
+  pg_stop
+  say "• Остановлено. Данные сохранены в $DATA"
+}
+
+cmd_run() {
+  [[ "$(id -u)" == "0" ]] && die "запускайте от обычного пользователя, не от root (PostgreSQL не работает под root)"
+  FIRST_RUN=0
+  ensure_config
+  load_config
+  port_busy "$API_PORT" && die "порт $API_PORT занят (задайте другой API_PORT в $CONF)"
+  pg_init
+  trap 'cleanup; exit 0' INT TERM
+  trap cleanup EXIT
+  pg_start
+  mkdir -p "$PROMETHEUS_MULTIPROC_DIR"; find "$PROMETHEUS_MULTIPROC_DIR" -mindepth 1 -delete
+
+  say "• Запускаю «Бюджет-менеджер LLM» $VERSION"
+  BM_APPIMAGE_ADMIN_DIR="$ADMIN_DIR" "$PY" -m bm_appimage.serve --host "$BIND_ADDR" --port "$API_PORT" \
+    >>"$LOGS/api.log" 2>&1 &
+  PIDS+=($!)
+  local url="http://127.0.0.1:$API_PORT"
+  local ok=0
+  for _ in $(seq 120); do
+    kill -0 "${PIDS[0]}" 2>/dev/null || { tail -n 40 "$LOGS/api.log" >&2; die "api завершился при старте"; }
+    if "$PY" -c 'import sys,urllib.request; urllib.request.urlopen(sys.argv[1], timeout=2)' "$url/readyz" 2>/dev/null; then ok=1; break; fi
+    sleep 1
+  done
+  [[ $ok == 1 ]] || { tail -n 40 "$LOGS/api.log" >&2; die "api не ответил на /readyz за 2 минуты"; }
+  env -u PROMETHEUS_MULTIPROC_DIR "$PY" -m bm.worker >>"$LOGS/worker.log" 2>&1 &
+  PIDS+=($!)
+
+  say ""
+  say "  Готово. Админка: $url/admin/"
+  if [[ $FIRST_RUN == 1 ]]; then
+    say "  Первый вход: логин ${ADMIN_INITIAL_LOGIN:-admin}, пароль $ADMIN_INITIAL_PASSWORD"
+    say "  (система попросит сменить пароль; показать снова: $(basename "${APPIMAGE:-$0}") password)"
+  fi
+  say "  Данные и настройки: $DATA     Журналы: $LOGS"
+  say "  Остановить: Ctrl+C"
+  say ""
+  if [[ -z "${LLM_BUDGET_NO_BROWSER:-}" ]] && command -v xdg-open >/dev/null 2>&1 && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+    xdg-open "$url/admin/" >/dev/null 2>&1 || true
+  fi
+  # Любой процесс упал — останавливаем всё (как restart: no). Ctrl+C — cleanup через trap.
+  wait -n "${PIDS[@]}" || true
+  say "llm-budget: один из процессов завершился, см. $LOGS" >&2
+  exit 1
+}
+
+cmd_backup() {
+  [[ -f "$CONF" ]] || die "нет данных: сначала запустите приложение"
+  load_config
+  local started=0
+  if ! "$PGBIN/pg_ctl" -D "$PGDATA" status >/dev/null 2>&1; then pg_start; started=1; fi
+  mkdir -p "$DATA/backups"
+  local f; f="$DATA/backups/bm-$(date +%Y%m%d-%H%M%S).dump"
+  "$PGBIN/pg_dump" -h 127.0.0.1 -p "$PG_PORT" -U bm -Fc -f "$f" bm
+  [[ $started == 1 ]] && pg_stop
+  say "Копия: $f"
+}
+
+case "${1:-run}" in
+  run|start) cmd_run ;;
+  password) [[ -f "$CONF" ]] || die "ещё не запускалось"; grep -E '^ADMIN_INITIAL_(LOGIN|PASSWORD)=' "$CONF" ;;
+  backup) cmd_backup ;;
+  config) echo "$CONF" ;;
+  version|--version) echo "LLM Budget Manager $VERSION (AppImage)" ;;
+  help|-h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "неизвестная команда: $1 (см. help)" ;;
+esac

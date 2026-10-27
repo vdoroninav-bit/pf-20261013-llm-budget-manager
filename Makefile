@@ -42,7 +42,7 @@ DATABASE_URL ?= postgresql://postgres@127.0.0.1:5433/bm_test
 export DATABASE_URL
 
 .PHONY: help sync test-unit test test-docker lint fmt lint-imports check egress-host-check compose-check \
-        build up down smoke logs backup restore load failover e2e clean up-local down-local
+        build up down smoke logs backup restore load failover e2e clean up-local down-local appimage
 
 help: ## Показать цели
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -136,6 +136,11 @@ up-local: sync ## Поднять стек из локальных процесс
 
 down-local: ## Остановить стек из локальных процессов (данные кластера сохраняются; удалить: deploy/local/stack.sh destroy)
 	$(LOCAL_STACK) down
+
+# ---------- Linux AppImage: запуск одним файлом без Docker (deploy/appimage) ----------
+
+appimage: ## Собрать dist/LLM_Budget_Manager-<версия>-x86_64.AppImage (Python, PostgreSQL 16 и админка внутри)
+	deploy/appimage/build.sh
 
 # Цель от QA (T086), с пакета 5 (5Д8 (1)) — в зоне DevOps; поведение прежнее: генератор — tests/load/run_load.sh.
 # Замер SC-001 — без параллельных make test и нагрузок (5Д2).

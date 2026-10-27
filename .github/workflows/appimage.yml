@@ -1,0 +1,55 @@
+# Сборка Linux AppImage (deploy/appimage/build.sh, цель make appimage) и проверка запуска smoke-тестами.
+# Запуск: вручную (workflow_dispatch) или по тегу v*. Файл AppImage — артефакт прогона (храним 30 дней).
+# Сторонних actions нет: только actions/checkout, actions/setup-node и actions/upload-artifact (издатель actions/, 3Д4). Секретов нет.
+name: appimage
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  appimage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+
+      - name: Инструменты
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q desktop-file-utils
+          python3 -m pip install --user "uv==0.11.32"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Сборка
+        run: make appimage
+
+      - name: Запуск и smoke
+        run: |
+          set -euo pipefail
+          IMG="$(ls dist/LLM_Budget_Manager-*-x86_64.AppImage)"
+          export LLM_BUDGET_HOME="$RUNNER_TEMP/llm-budget" LLM_BUDGET_NO_BROWSER=1
+          "$IMG" >"$RUNNER_TEMP/run.log" 2>&1 &
+          APP_PID=$!
+          for i in $(seq 90); do curl -fs http://127.0.0.1:8080/readyz && break; sleep 2; done
+          curl -fs http://127.0.0.1:8080/readyz
+          echo "::add-mask::$(sed -n 's/^ADMIN_INITIAL_PASSWORD=//p' "$LLM_BUDGET_HOME/config.env")"
+          PW="appimage-$(openssl rand -hex 8)"; echo "::add-mask::$PW"
+          BM_SMOKE=1 BM_STACK=local BASE_URL=http://127.0.0.1:8080 BM_ENV_FILE="$LLM_BUDGET_HOME/config.env" \
+            BM_ADMIN_PASSWORD="$PW" uv run --project app/backend pytest tests/smoke -q -ra
+          kill -TERM "$APP_PID"; wait "$APP_PID" || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LLM_Budget_Manager-AppImage
+          path: |
+            dist/LLM_Budget_Manager-*-x86_64.AppImage
+            dist/LLM_Budget_Manager-*-x86_64.AppImage.sha256
+          retention-days: 30

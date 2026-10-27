@@ -87,6 +87,24 @@ curl -s http://127.0.0.1:8080/api/v1/decisions -H "X-Api-Key: <ключ>" -H 'Co
   -d '{"subject":{"type":"service"},"model":"<id модели>","kind":"chat","input_tokens":1000}'
 ```
 
+### 3а. Быстрый запуск одним файлом (Linux AppImage)
+
+Для пилота, демонстрации или одного сервера без Docker. Нужен Linux x86_64 с glibc 2.28+ (Ubuntu 20.04+, Debian 10+, Astra Linux, РЕД ОС, RHEL 8+). Внутри файла — Python 3.13 с приложением, PostgreSQL 16 и админка.
+
+```bash
+chmod +x LLM_Budget_Manager-0.1.0-x86_64.AppImage
+./LLM_Budget_Manager-0.1.0-x86_64.AppImage            # запуск; остановка — Ctrl+C
+```
+
+При первом запуске создаются база и секреты. В терминале будет адрес админки (http://127.0.0.1:8080/admin/) и начальный пароль `admin`. Показать пароль снова: `./LLM_Budget_Manager-…AppImage password`.
+
+- Данные и настройки лежат в `~/.local/share/llm-budget` (другой каталог — переменная `LLM_BUDGET_HOME`). Настройки — `config.env`: порт `API_PORT`, `BIND_ADDR`, импорт расхода, webhook; переменные те же, что в разделе 4. После правки перезапустите приложение.
+- Копия базы: `./…AppImage backup` (pg_dump в `backups/`).
+- Запускать от обычного пользователя, не от root.
+- Без FUSE (контейнеры, минимальные серверы): `APPIMAGE_EXTRACT_AND_RUN=1 ./…AppImage`.
+- Отличия от Docker-поставки: PostgreSQL 16 вместо 18, нет отдельного контейнера резервного копирования по расписанию (копия — командой `backup`), процессы не перезапускаются сами. Для продуктивной работы используйте Docker-поставку.
+- Собрать файл самим: `make appimage` (нужны uv, Node, desktop-file-utils и доступ к PyPI, npm и GitHub).
+
 ## 4. Переменные окружения
 
 Источник истины — `deploy/.env.example`: в нём есть каждая переменная с комментарием. Здесь — сводка.
