@@ -78,6 +78,7 @@ make smoke BM_ADMIN_PASSWORD='<новый пароль>'   # путь до пе�
 | Стек без Docker (разработка) | `make up-local`, `make smoke BM_STACK=local`, `make down-local` |
 | Закрытый контур | `docs/admin-guide.md` §13 |
 | Один файл без Docker (Linux AppImage, пилот) | `make appimage` → `./LLM_Budget_Manager-0.1.0-x86_64.AppImage`; §3а, `deploy/appimage/README.md` |
+| Mac (Apple Silicon) без Docker, пилот | `make macos-app` → zip с «LLM Budget Manager.app»; §3б, `deploy/macos/README.md` |
 
 Импорт расхода по умолчанию выключен (`IMPORT_ENABLED=false`). Включение — §8–§9. Webhook включается заданием `WEBHOOK_URL` с внутренним IP-адресом (§10). Интеграция вызывающих систем — `docs/integration-guide.md`.
 

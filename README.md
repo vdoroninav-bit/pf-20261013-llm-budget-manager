@@ -37,6 +37,7 @@
 | [docs/admin-guide.md](docs/admin-guide.md) | Руководство администратора (§14 — проверка поставки на своём стенде) |
 | [docs/integration-guide.md](docs/integration-guide.md) | Руководство по интеграции вызывающих систем |
 | [deploy/appimage/README.md](deploy/appimage/README.md) | **Linux AppImage**: запуск одним файлом без Docker (`make appimage`), состав и лицензии |
+| [deploy/macos/README.md](deploy/macos/README.md) | **Mac-приложение** (Apple Silicon) без Docker (`make macos-app`), состав и лицензии |
 | [deploy/ci/runs/d98ba2d.md](deploy/ci/runs/d98ba2d.md) | CI релизного SHA (аннотации check-run) |
 
 Код: `app/backend` (Python, FastAPI), `app/frontend` (админка, react-admin), `app/client` (эталонный клиент `budget_client`), `deploy/` (Docker, compose, CI, SDL), `tests/`. Точка входа — `Makefile` (`make help`).

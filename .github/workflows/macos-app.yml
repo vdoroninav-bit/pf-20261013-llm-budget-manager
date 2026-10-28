@@ -1,0 +1,75 @@
+# Mac-приложение для Apple Silicon (deploy/macos/build.sh, цель make macos-app): сборка на Linux (кросс-сборка из
+# готовых бинарников) и проверка на настоящем Mac arm64 (macos-14): распаковка как в Finder (ditto), запуск
+# приложения без окна (LLM_BUDGET_HEADLESS=1), smoke, остановка, проверка подписей встроенных бинарников.
+# Запуск: вручную или по тегу v*. Zip — артефакт прогона. Только actions/* (3Д4). Секретов нет.
+name: macos-app
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - name: Инструменты
+        run: |
+          python3 -m pip install --user "uv==0.11.32"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Сборка
+        run: make macos-app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LLM_Budget_Manager-macos-arm64
+          path: |
+            dist/LLM_Budget_Manager-*-macos-arm64.zip
+            dist/LLM_Budget_Manager-*-macos-arm64.zip.sha256
+          retention-days: 30
+
+  verify-on-mac:
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: LLM_Budget_Manager-macos-arm64
+          path: dist
+      - name: Распаковка и подписи
+        run: |
+          set -euo pipefail
+          ditto -x -k dist/LLM_Budget_Manager-*-macos-arm64.zip "$RUNNER_TEMP/app"
+          APP="$RUNNER_TEMP/app/LLM Budget Manager.app"
+          plutil -lint "$APP/Contents/Info.plist"
+          R="$APP/Contents/Resources"
+          for b in "$R/python/bin/python3.13" "$R"/pg/pgserver/pginstall/bin/*; do codesign --verify "$b"; done
+          find "$R" \( -name '*.so' -o -name '*.dylib' \) -print0 | xargs -0 -n1 codesign --verify
+          echo "APP=$APP" >> "$GITHUB_ENV"
+      - name: Запуск и smoke
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --break-system-packages "uv==0.11.32" || python3 -m pip install --user "uv==0.11.32"
+          export PATH="$(python3 -m site --user-base)/bin:$PATH"
+          export LLM_BUDGET_HOME="$RUNNER_TEMP/data" LLM_BUDGET_HEADLESS=1
+          "$APP/Contents/MacOS/LLM Budget Manager" >"$RUNNER_TEMP/launcher.log" 2>&1 &
+          PID=$!
+          for i in $(seq 90); do curl -fs http://127.0.0.1:8080/readyz && break; sleep 2; done
+          curl -fs http://127.0.0.1:8080/readyz || { cat "$RUNNER_TEMP/launcher.log"; tail -n 50 "$LLM_BUDGET_HOME"/logs/*.log; exit 1; }
+          curl -fs -o /dev/null http://127.0.0.1:8080/admin/
+          echo "::add-mask::$(sed -n 's/^ADMIN_INITIAL_PASSWORD=//p' "$LLM_BUDGET_HOME/config.env")"
+          PW="mac-$(openssl rand -hex 8)"; echo "::add-mask::$PW"
+          BM_SMOKE=1 BM_STACK=local BASE_URL=http://127.0.0.1:8080 BM_ENV_FILE="$LLM_BUDGET_HOME/config.env" \
+            BM_ADMIN_PASSWORD="$PW" uv run --project app/backend pytest tests/smoke -q -ra
+          kill -TERM "$PID"; wait "$PID" || true
+          sleep 2
+          if pgrep -f "$APP" >/dev/null; then echo "::error::процессы приложения не остановились"; exit 1; fi
